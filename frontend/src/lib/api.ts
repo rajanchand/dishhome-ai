@@ -153,6 +153,54 @@ export interface VoiceHealth {
   defaults_set: Record<string, boolean>;
 }
 
+// ---- Monitoring (login activity + active sessions) ----
+export interface GeoInfo {
+  city: string;
+  country: string;
+  country_code: string;
+  region: string;
+  lat: number | null;
+  lon: number | null;
+}
+
+export interface LoginEvent {
+  at: number;
+  username: string;
+  ip: string;
+  user_agent: string;
+  device: string;
+  result: "success" | "failure";
+  reason: string;
+  session_prefix: string;
+  geo: GeoInfo | null;
+}
+
+export interface LoginActivityStats {
+  total_events: number;
+  logins_24h_success: number;
+  logins_24h_failure: number;
+  unique_ips_24h: number;
+  unique_users_24h: number;
+}
+
+export interface LoginActivityResponse {
+  events: LoginEvent[];
+  stats: LoginActivityStats;
+}
+
+export interface ActiveSession {
+  token_prefix: string;
+  username: string;
+  issued_at: number;
+  expires_at: number;
+  last_seen: number;
+  issued_ip: string;
+  last_ip: string;
+  user_agent: string;
+  device: string;
+  geo: GeoInfo | null;
+}
+
 export interface LoginResponse {
   token: string;
   user: User;

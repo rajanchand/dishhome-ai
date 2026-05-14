@@ -46,6 +46,7 @@ const NAV: NavGroup[] = [
     requires: "users.manage",
     items: [
       { to: "/admin/access", label: "Access Portal", icon: "🛡", requires: "users.manage" },
+      { to: "/admin/login-activity", label: "Login Activity", icon: "📍", requires: "users.manage" },
       { to: "/settings", label: "Settings", icon: "⚒" },
     ],
   },

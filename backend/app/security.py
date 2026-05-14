@@ -62,32 +62,49 @@ SESSION_IDLE_RENEWAL_SECONDS = 60 * 60  # only bump expiry at most hourly to kee
 
 
 class _Session:
-    __slots__ = ("username", "issued_at", "expires_at", "last_seen")
+    __slots__ = (
+        "username",
+        "issued_at",
+        "expires_at",
+        "last_seen",
+        "issued_ip",
+        "user_agent",
+        "last_ip",
+    )
 
-    def __init__(self, username: str, ttl: int) -> None:
+    def __init__(self, username: str, ttl: int, ip: str = "", user_agent: str = "") -> None:
         now = time.time()
         self.username = username
         self.issued_at = now
         self.expires_at = now + ttl
         self.last_seen = now
+        self.issued_ip = ip
+        self.user_agent = user_agent
+        self.last_ip = ip
 
 
 _SESSIONS: dict[str, _Session] = {}
 _SESSIONS_LOCK = Lock()
 
 
-def issue_session(username: str, ttl: int = SESSION_TTL_SECONDS) -> str:
+def issue_session(
+    username: str,
+    ttl: int = SESSION_TTL_SECONDS,
+    ip: str = "",
+    user_agent: str = "",
+) -> str:
     token = secrets.token_urlsafe(32)
     with _SESSIONS_LOCK:
-        _SESSIONS[token] = _Session(username, ttl)
+        _SESSIONS[token] = _Session(username, ttl, ip=ip, user_agent=user_agent)
     return token
 
 
-def resolve_session(token: str) -> str | None:
+def resolve_session(token: str, ip: str | None = None) -> str | None:
     """Return the session's username if valid, else None.
 
     Side effect: bumps `expires_at` if the session is more than
     SESSION_IDLE_RENEWAL_SECONDS into its TTL — sliding-window auth.
+    Also records the current IP so the monitoring view shows "last seen from".
     """
     if not token:
         return None
@@ -102,6 +119,8 @@ def resolve_session(token: str) -> str | None:
         if (now - s.last_seen) > SESSION_IDLE_RENEWAL_SECONDS:
             s.last_seen = now
             s.expires_at = now + SESSION_TTL_SECONDS
+        if ip:
+            s.last_ip = ip
         return s.username
 
 
@@ -120,8 +139,45 @@ def revoke_user_sessions(username: str) -> int:
     return n
 
 
+def revoke_session_by_prefix(prefix: str) -> bool:
+    """Admin convenience: revoke a session by its token's first ~8 chars.
+
+    Full tokens are never exposed via the API — the admin UI shows a short
+    prefix so they can identify and kill specific sessions.
+    """
+    if not prefix or len(prefix) < 6:
+        return False
+    with _SESSIONS_LOCK:
+        for tok in list(_SESSIONS.keys()):
+            if tok.startswith(prefix):
+                _SESSIONS.pop(tok, None)
+                return True
+    return False
+
+
 def session_count() -> int:
     return len(_SESSIONS)
+
+
+def active_sessions() -> list[dict]:
+    """Snapshot of every live session (no token values; just prefixes)."""
+    with _SESSIONS_LOCK:
+        rows = []
+        for tok, s in _SESSIONS.items():
+            rows.append(
+                {
+                    "token_prefix": tok[:8],
+                    "username": s.username,
+                    "issued_at": s.issued_at,
+                    "expires_at": s.expires_at,
+                    "last_seen": s.last_seen,
+                    "issued_ip": s.issued_ip,
+                    "last_ip": s.last_ip,
+                    "user_agent": s.user_agent,
+                }
+            )
+    rows.sort(key=lambda r: r["last_seen"], reverse=True)
+    return rows
 
 
 def prune_expired_sessions() -> int:
@@ -213,3 +269,149 @@ def audit(actor: str, action: str, target: str, detail: str = "") -> None:
 
 def audit_log(limit: int = 100) -> list[dict]:
     return list(reversed(list(_AUDIT)))[:limit]
+
+
+# ----- Login events ring (rich, for the monitoring page) -----
+
+_LOGIN_EVENTS: deque[dict] = deque(maxlen=500)
+
+
+def record_login_event(
+    *,
+    username: str,
+    ip: str,
+    user_agent: str,
+    result: str,  # "success" | "failure"
+    reason: str = "",
+    session_prefix: str = "",
+) -> None:
+    _LOGIN_EVENTS.append(
+        {
+            "at": time.time(),
+            "username": username,
+            "ip": ip,
+            "user_agent": user_agent,
+            "device": parse_user_agent(user_agent),
+            "result": result,
+            "reason": reason,
+            "session_prefix": session_prefix,
+        }
+    )
+
+
+def login_events(limit: int = 100) -> list[dict]:
+    return list(reversed(list(_LOGIN_EVENTS)))[: max(1, min(limit, 500))]
+
+
+# ----- User-agent parser (regex; no external dep) -----
+
+_OS_PATTERNS = [
+    ("iPhone", "iOS"),
+    ("iPad", "iPadOS"),
+    ("Android", "Android"),
+    ("Windows NT 11", "Windows 11"),
+    ("Windows NT 10", "Windows 10"),
+    ("Windows NT", "Windows"),
+    ("Mac OS X", "macOS"),
+    ("CrOS", "ChromeOS"),
+    ("Linux", "Linux"),
+]
+_BROWSER_PATTERNS = [
+    # Order matters: Edge/Opera/Brave masquerade as Chrome.
+    ("Edg/", "Edge"),
+    ("EdgA/", "Edge"),
+    ("OPR/", "Opera"),
+    ("OPiOS/", "Opera"),
+    ("Brave/", "Brave"),
+    ("CriOS/", "Chrome"),
+    ("Chromium/", "Chromium"),
+    ("Chrome/", "Chrome"),
+    ("FxiOS/", "Firefox"),
+    ("Firefox/", "Firefox"),
+    ("Safari/", "Safari"),
+    ("curl/", "curl"),
+    ("httpx", "httpx"),
+    ("python-requests", "python"),
+]
+
+
+def parse_user_agent(ua: str | None) -> str:
+    """Best-effort 'Chrome on macOS' label. Falls back to a truncated UA."""
+    if not ua:
+        return "Unknown"
+    os_name = "Unknown OS"
+    for pat, name in _OS_PATTERNS:
+        if pat in ua:
+            os_name = name
+            break
+    browser = "Unknown"
+    for pat, name in _BROWSER_PATTERNS:
+        if pat in ua:
+            browser = name
+            break
+    if browser == "Unknown" and os_name == "Unknown OS":
+        return ua[:64]
+    return f"{browser} on {os_name}"
+
+
+# ----- IP geolocation (cached, lazy via ip-api.com) -----
+
+_GEO_CACHE: dict[str, dict] = {}
+_GEO_LOCK = Lock()
+
+
+def _is_private_ip(ip: str) -> bool:
+    if not ip or ip in {"0.0.0.0", "::1", "127.0.0.1", "localhost"}:
+        return True
+    if ip.startswith(("10.", "192.168.", "169.254.", "fe80:", "fc00:", "fd00:")):
+        return True
+    # 172.16.0.0/12
+    if ip.startswith("172."):
+        try:
+            second = int(ip.split(".", 2)[1])
+            if 16 <= second <= 31:
+                return True
+        except (ValueError, IndexError):
+            pass
+    return False
+
+
+async def geo_for_ip(ip: str) -> dict:
+    """Return {city, country, country_code, region, lat, lon} for an IP.
+
+    Cached per process. Uses ip-api.com (free, 45 req/min, no key). Falls
+    back to a placeholder when the lookup fails or the IP is private.
+    """
+    with _GEO_LOCK:
+        cached = _GEO_CACHE.get(ip)
+    if cached is not None:
+        return cached
+    if _is_private_ip(ip):
+        result = {"city": "Local network", "country": "—", "country_code": "", "region": "", "lat": None, "lon": None}
+        with _GEO_LOCK:
+            _GEO_CACHE[ip] = result
+        return result
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(
+                f"http://ip-api.com/json/{ip}",
+                params={"fields": "status,country,countryCode,city,regionName,lat,lon"},
+            )
+            d = r.json()
+        if d.get("status") == "success":
+            result = {
+                "city": d.get("city") or "—",
+                "country": d.get("country") or "—",
+                "country_code": d.get("countryCode") or "",
+                "region": d.get("regionName") or "",
+                "lat": d.get("lat"),
+                "lon": d.get("lon"),
+            }
+        else:
+            result = {"city": "Unknown", "country": "—", "country_code": "", "region": "", "lat": None, "lon": None}
+    except Exception:
+        result = {"city": "Lookup failed", "country": "—", "country_code": "", "region": "", "lat": None, "lon": None}
+    with _GEO_LOCK:
+        _GEO_CACHE[ip] = result
+    return result

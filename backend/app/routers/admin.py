@@ -14,10 +14,14 @@ from app.mock_data import USERS
 from app.rbac import ROLE_ORDER, ROLE_PERMISSIONS, permissions_for
 from app.routers.auth import UserOut, require_permission
 from app.security import (
+    active_sessions,
     audit,
     audit_log,
+    geo_for_ip,
     hash_password,
     issue_session,
+    login_events,
+    revoke_session_by_prefix,
     revoke_user_sessions,
 )
 
@@ -246,6 +250,132 @@ def get_audit_log(
     limit: int = 100,
 ) -> list[AuditEntry]:
     return [AuditEntry(**e) for e in audit_log(limit=max(1, min(limit, 500)))]
+
+
+# ---- Monitoring: login activity + active sessions ----
+
+class GeoInfo(BaseModel):
+    city: str = ""
+    country: str = ""
+    country_code: str = ""
+    region: str = ""
+    lat: float | None = None
+    lon: float | None = None
+
+
+class LoginEvent(BaseModel):
+    at: float
+    username: str
+    ip: str
+    user_agent: str
+    device: str
+    result: str  # "success" | "failure"
+    reason: str = ""
+    session_prefix: str = ""
+    geo: GeoInfo | None = None
+
+
+class ActiveSession(BaseModel):
+    token_prefix: str
+    username: str
+    issued_at: float
+    expires_at: float
+    last_seen: float
+    issued_ip: str
+    last_ip: str
+    user_agent: str
+    device: str
+    geo: GeoInfo | None = None
+
+
+class LoginActivityResponse(BaseModel):
+    events: list[LoginEvent]
+    stats: dict
+
+
+@router.get("/login-activity", response_model=LoginActivityResponse)
+async def get_login_activity(
+    _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    limit: int = 100,
+) -> LoginActivityResponse:
+    import time as _time
+    raw = login_events(limit=max(1, min(limit, 500)))
+    # Enrich every distinct IP with a geo lookup (cached after the first hit).
+    distinct_ips = {e["ip"] for e in raw if e.get("ip")}
+    geo_by_ip: dict[str, dict] = {}
+    for ip in distinct_ips:
+        geo_by_ip[ip] = await geo_for_ip(ip)
+
+    events: list[LoginEvent] = []
+    for e in raw:
+        events.append(
+            LoginEvent(
+                at=e["at"],
+                username=e["username"],
+                ip=e["ip"],
+                user_agent=e["user_agent"],
+                device=e["device"],
+                result=e["result"],
+                reason=e.get("reason", "") or "",
+                session_prefix=e.get("session_prefix", "") or "",
+                geo=GeoInfo(**geo_by_ip[e["ip"]]) if e.get("ip") in geo_by_ip else None,
+            )
+        )
+    now = _time.time()
+    day_ago = now - 86400
+    last24 = [e for e in raw if e["at"] >= day_ago]
+    stats = {
+        "total_events": len(raw),
+        "logins_24h_success": sum(1 for e in last24 if e["result"] == "success"),
+        "logins_24h_failure": sum(1 for e in last24 if e["result"] == "failure"),
+        "unique_ips_24h": len({e["ip"] for e in last24 if e.get("ip")}),
+        "unique_users_24h": len({e["username"] for e in last24 if e["result"] == "success"}),
+    }
+    return LoginActivityResponse(events=events, stats=stats)
+
+
+@router.get("/active-sessions", response_model=list[ActiveSession])
+async def get_active_sessions(
+    _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+) -> list[ActiveSession]:
+    from app.security import parse_user_agent
+    rows = active_sessions()
+    # Enrich distinct IPs.
+    distinct_ips = {r["last_ip"] or r["issued_ip"] for r in rows if r.get("last_ip") or r.get("issued_ip")}
+    geo_by_ip: dict[str, dict] = {}
+    for ip in distinct_ips:
+        geo_by_ip[ip] = await geo_for_ip(ip)
+
+    out: list[ActiveSession] = []
+    for r in rows:
+        ip = r["last_ip"] or r["issued_ip"]
+        out.append(
+            ActiveSession(
+                token_prefix=r["token_prefix"],
+                username=r["username"],
+                issued_at=r["issued_at"],
+                expires_at=r["expires_at"],
+                last_seen=r["last_seen"],
+                issued_ip=r["issued_ip"],
+                last_ip=r["last_ip"],
+                user_agent=r["user_agent"],
+                device=parse_user_agent(r["user_agent"]),
+                geo=GeoInfo(**geo_by_ip[ip]) if ip in geo_by_ip else None,
+            )
+        )
+    return out
+
+
+@router.post("/active-sessions/{token_prefix}/revoke")
+def revoke_one_session(
+    token_prefix: str,
+    actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+) -> dict[str, str | bool]:
+    ok = revoke_session_by_prefix(token_prefix.strip())
+    if not ok:
+        raise HTTPException(404, "No session matched that prefix")
+    audit(actor=actor.username, action="session.revoke", target=token_prefix, detail="manual")
+    return {"status": "revoked", "token_prefix": token_prefix}
 
 
 @router.post("/users/_seed-token")

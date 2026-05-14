@@ -24,6 +24,7 @@ import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import SavedReplies from "./pages/SavedReplies";
 import AccessPortal from "./pages/AccessPortal";
+import LoginActivity from "./pages/LoginActivity";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -69,6 +70,7 @@ export default function App() {
                 <Route path="integrations" element={<Integrations />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="admin/access" element={<AccessPortal />} />
+                <Route path="admin/login-activity" element={<LoginActivity />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
