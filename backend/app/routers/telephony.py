@@ -133,17 +133,20 @@ async def originate(
     # Pre-synthesize audio if ElevenLabs is available, so the TwiML can <Play>.
     # (If not, the TwiML route will fall back to <Say>.)
     audio_url: str | None = None
-    from app.routers.voice import _find_voice  # local import to avoid cycle
+    # Route through resolve_voice so a configured primary voice (e.g. an
+    # uploaded "Rajan" clone) overrides whatever the campaign was saved with.
+    from app.routers.voice import resolve_voice  # local import to avoid cycle
 
-    voice = _find_voice(payload.voice_id)
+    voice = resolve_voice(voice_id=payload.voice_id, language=payload.language)
     if not voice:
         raise HTTPException(404, f"Voice {payload.voice_id!r} not found")
+    resolved_voice_id = voice["id"]
     eleven_id = voice.get("elevenlabs_voice_id")
     if settings.elevenlabs_enabled and eleven_id:
         try:
             from app.routers.voice import synthesize_to_cache
             await synthesize_to_cache(eleven_id, payload.text)
-            qs = urlencode({"voice_id": payload.voice_id, "text": payload.text, "token": session_id})
+            qs = urlencode({"voice_id": resolved_voice_id, "text": payload.text, "token": session_id})
             audio_url = f"{base}/voice/tts/public?{qs}"
         except Exception as e:  # pragma: no cover - graceful fallback
             audio_url = None
@@ -157,7 +160,9 @@ async def originate(
         "call_sid": None,
         "to": payload.to,
         "from_": settings.twilio_from_number,
-        "voice_id": payload.voice_id,
+        # Store the *resolved* voice — that's the one we actually used for synth
+        # and the one tts_public will be called against.
+        "voice_id": resolved_voice_id,
         "language": payload.language,
         "text": payload.text,
         "status": "queued",

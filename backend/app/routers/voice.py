@@ -33,6 +33,7 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "voice_uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CATALOG_FILE = UPLOAD_DIR / "_catalog.json"
+DEFAULTS_FILE = UPLOAD_DIR / "_defaults.json"
 
 SYNTH_CACHE_DIR = UPLOAD_DIR / "_synth_cache"
 SYNTH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,8 +67,12 @@ class Voice(BaseModel):
 
 
 class PreviewRequest(BaseModel):
-    voice_id: str
+    # Now optional: when omitted the resolver picks the primary voice (or the
+    # per-language default). Clients can pass voice_id to test a specific one.
+    voice_id: str | None = None
     text: str = Field(min_length=1, max_length=400)
+    language: str | None = None
+    gender: str | None = None
 
 
 class PreviewResponse(BaseModel):
@@ -118,6 +123,73 @@ def _find_voice(voice_id: str) -> dict | None:
     return next((v for v in _all_voices() if v["id"] == voice_id), None)
 
 
+# ---- primary-voice resolver ----
+# `primary_voice_id` (when set) overrides everything: every preview, campaign,
+# and outbound call uses this voice regardless of what the caller passed.
+# `defaults_by_lang_gender` lets you set per-(language,gender) fallbacks.
+
+def _load_defaults() -> dict:
+    if not DEFAULTS_FILE.exists():
+        return {"primary_voice_id": None, "defaults_by_lang_gender": {}}
+    try:
+        data = json.loads(DEFAULTS_FILE.read_text())
+        data.setdefault("primary_voice_id", None)
+        data.setdefault("defaults_by_lang_gender", {})
+        return data
+    except json.JSONDecodeError:
+        return {"primary_voice_id": None, "defaults_by_lang_gender": {}}
+
+
+def _save_defaults(data: dict) -> None:
+    DEFAULTS_FILE.write_text(json.dumps(data, indent=2))
+
+
+def resolve_voice(
+    voice_id: str | None = None,
+    language: str | None = None,
+    gender: str | None = None,
+) -> dict | None:
+    """Return the voice the system should actually use.
+
+    Precedence:
+      1. primary_voice_id (operator override — wins over everything)
+      2. requested voice_id (if it exists in the catalog)
+      3. per-(language, gender) default
+      4. per-language default (any gender)
+      5. first matching builtin for that language
+      6. first voice in catalog
+    """
+    defaults = _load_defaults()
+    primary = defaults.get("primary_voice_id")
+    if primary:
+        v = _find_voice(primary)
+        if v:
+            return v
+    if voice_id:
+        v = _find_voice(voice_id)
+        if v:
+            return v
+    by_lg = defaults.get("defaults_by_lang_gender") or {}
+    if language and gender:
+        key = f"{language}/{gender}"
+        target = by_lg.get(key)
+        if target:
+            v = _find_voice(target)
+            if v:
+                return v
+    if language:
+        for key, target in by_lg.items():
+            if key.startswith(f"{language}/"):
+                v = _find_voice(target)
+                if v:
+                    return v
+        for v in _all_voices():
+            if v.get("language") == language:
+                return v
+    catalog = _all_voices()
+    return catalog[0] if catalog else None
+
+
 def _cache_key(eleven_voice_id: str, text: str) -> str:
     h = hashlib.sha256(f"{eleven_voice_id}|{text}".encode()).hexdigest()[:24]
     return h
@@ -141,9 +213,12 @@ def list_voices(_: Annotated[UserOut, Depends(require_permission("voice.read"))]
 
 @router.get("/health")
 def voice_health(_: Annotated[UserOut, Depends(current_user)]) -> dict:
+    d = _load_defaults()
     return {
         "elevenlabs_enabled": settings.elevenlabs_enabled,
         "model_id": settings.elevenlabs_model_id,
+        "primary_voice_id": d.get("primary_voice_id"),
+        "defaults_by_lang_gender": d.get("defaults_by_lang_gender", {}),
         "defaults_set": {
             "ne_female": bool(settings.elevenlabs_voice_ne_female),
             "ne_male": bool(settings.elevenlabs_voice_ne_male),
@@ -153,24 +228,99 @@ def voice_health(_: Annotated[UserOut, Depends(current_user)]) -> dict:
     }
 
 
+# ---- voice defaults (primary override + per-lang/gender) ----
+class VoiceDefaults(BaseModel):
+    primary_voice_id: str | None = None
+    defaults_by_lang_gender: dict[str, str] = {}
+
+
+@router.get("/defaults", response_model=VoiceDefaults)
+def get_defaults(_: Annotated[UserOut, Depends(require_permission("voice.read"))]) -> VoiceDefaults:
+    return VoiceDefaults(**_load_defaults())
+
+
+@router.put("/defaults", response_model=VoiceDefaults)
+def set_defaults(
+    payload: VoiceDefaults,
+    _: Annotated[UserOut, Depends(require_permission("voice.upload"))],
+) -> VoiceDefaults:
+    # Validate every referenced voice_id exists.
+    if payload.primary_voice_id and not _find_voice(payload.primary_voice_id):
+        raise HTTPException(404, f"primary_voice_id {payload.primary_voice_id!r} not found")
+    for key, vid in payload.defaults_by_lang_gender.items():
+        if "/" not in key:
+            raise HTTPException(400, f"Bad lang/gender key {key!r} — use 'ne/female' style")
+        if not _find_voice(vid):
+            raise HTTPException(404, f"Voice {vid!r} for {key} not found")
+    data = payload.model_dump()
+    _save_defaults(data)
+    return VoiceDefaults(**data)
+
+
+@router.post("/voices/{voice_id}/set-primary", response_model=VoiceDefaults)
+def set_primary(
+    voice_id: str,
+    _: Annotated[UserOut, Depends(require_permission("voice.upload"))],
+) -> VoiceDefaults:
+    v = _find_voice(voice_id)
+    if not v:
+        raise HTTPException(404, "Voice not found")
+    data = _load_defaults()
+    data["primary_voice_id"] = voice_id
+    _save_defaults(data)
+    return VoiceDefaults(**data)
+
+
+@router.post("/defaults/clear-primary", response_model=VoiceDefaults)
+def clear_primary(
+    _: Annotated[UserOut, Depends(require_permission("voice.upload"))],
+) -> VoiceDefaults:
+    data = _load_defaults()
+    data["primary_voice_id"] = None
+    _save_defaults(data)
+    return VoiceDefaults(**data)
+
+
+@router.get("/resolve")
+def resolve(
+    _: Annotated[UserOut, Depends(require_permission("voice.read"))],
+    voice_id: str | None = None,
+    language: str | None = None,
+    gender: str | None = None,
+) -> dict:
+    """Diagnostic: show which voice the system would pick for these inputs."""
+    v = resolve_voice(voice_id=voice_id, language=language, gender=gender)
+    if not v:
+        raise HTTPException(404, "No voices available")
+    d = _load_defaults()
+    return {
+        "resolved": Voice(**v).model_dump(),
+        "primary_override_applied": d.get("primary_voice_id") == v["id"],
+        "requested": {"voice_id": voice_id, "language": language, "gender": gender},
+    }
+
+
 @router.post("/preview", response_model=PreviewResponse)
 async def preview(
     payload: PreviewRequest,
     _: Annotated[UserOut, Depends(require_permission("voice.read"))],
 ) -> PreviewResponse:
-    voice = _find_voice(payload.voice_id)
+    voice = resolve_voice(
+        voice_id=payload.voice_id,
+        language=payload.language,
+        gender=payload.gender,
+    )
     if not voice:
-        raise HTTPException(404, "Voice not found")
+        raise HTTPException(404, "No voices available")
     eleven_id = voice.get("elevenlabs_voice_id")
     audio_url: str | None = None
     engine: Literal["elevenlabs", "browser-tts"] = "browser-tts"
     if settings.elevenlabs_enabled and eleven_id:
         try:
             await synthesize_to_cache(eleven_id, payload.text)
-            audio_url = f"/voice/tts?voice_id={payload.voice_id}&text={payload.text}"
+            audio_url = f"/voice/tts?voice_id={voice['id']}&text={payload.text}"
             engine = "elevenlabs"
         except ElevenLabsError:
-            # Surface but don't fail — fall back to browser TTS.
             audio_url = None
             engine = "browser-tts"
     return PreviewResponse(
@@ -248,6 +398,7 @@ async def upload_voice(
     gender: Annotated[Literal["female", "male"], Form()] = "female",
     tone: Annotated[str, Form(max_length=120)] = "custom upload",
     clone: Annotated[bool, Form()] = True,
+    set_as_primary: Annotated[bool, Form()] = False,
 ) -> Voice:
     ctype = (file.content_type or "").lower()
     if ctype not in ALLOWED_TYPES:
@@ -300,6 +451,18 @@ async def upload_voice(
     items = _load_uploaded()
     items.append(entry)
     _save_uploaded(items)
+
+    # Promote this voice to primary either when the operator asked for it, or
+    # automatically when it's the FIRST uploaded voice and no primary is set
+    # yet — so "I just uploaded Rajan's voice" makes the whole system use it
+    # without an extra click.
+    defaults = _load_defaults()
+    has_primary = bool(defaults.get("primary_voice_id"))
+    is_first_upload = len(items) == 1
+    if set_as_primary or (is_first_upload and not has_primary):
+        defaults["primary_voice_id"] = voice_id
+        _save_defaults(defaults)
+
     return Voice(
         id=entry["id"],
         name=entry["name"],

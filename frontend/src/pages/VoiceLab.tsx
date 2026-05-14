@@ -28,8 +28,14 @@ const PRESETS = [
   },
 ];
 
+interface VoiceDefaults {
+  primary_voice_id: string | null;
+  defaults_by_lang_gender: Record<string, string>;
+}
+
 export default function VoiceLab() {
   const [voices, setVoices] = useState<Voice[] | null>(null);
+  const [defaults, setDefaults] = useState<VoiceDefaults | null>(null);
   const [selected, setSelected] = useState<string>("");
   const [text, setText] = useState(PRESETS[0].text);
   const [playing, setPlaying] = useState(false);
@@ -40,11 +46,35 @@ export default function VoiceLab() {
 
   async function refresh() {
     try {
-      const v = await api.get<Voice[]>("/voice/voices");
+      const [v, d] = await Promise.all([
+        api.get<Voice[]>("/voice/voices"),
+        api.get<VoiceDefaults>("/voice/defaults"),
+      ]);
       setVoices(v);
+      setDefaults(d);
       if (!selected && v[0]) setSelected(v[0].id);
     } catch (e) {
       errToast(e, "Could not load voices");
+    }
+  }
+
+  async function makePrimary(v: Voice) {
+    try {
+      const d = await api.post<VoiceDefaults>(`/voice/voices/${v.id}/set-primary`);
+      setDefaults(d);
+      toast.success("Primary voice set", `${v.name} is now used everywhere — campaigns, calls, previews.`);
+    } catch (e) {
+      errToast(e, "Could not set primary");
+    }
+  }
+
+  async function clearPrimary() {
+    try {
+      const d = await api.post<VoiceDefaults>("/voice/defaults/clear-primary");
+      setDefaults(d);
+      toast.success("Primary cleared", "Calls now use the per-campaign voice again.");
+    } catch (e) {
+      errToast(e, "Could not clear primary");
     }
   }
 
@@ -125,9 +155,29 @@ export default function VoiceLab() {
     <>
       <PageHeader
         title="Voice Lab"
-        subtitle="Preview, upload, and clone the AI's voice. Upload a 5–60 second clean sample of any voice to train a custom voice clone (in production, this trains a Piper/Coqui model)."
+        subtitle="Upload a clean 5–60 second sample of any voice (Rajan, Bibek, Priya…) and mark it Primary — every campaign, demo call, and preview will use it automatically."
       />
       <PageBody>
+        {defaults?.primary_voice_id && (
+          <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 flex items-center justify-between">
+            <div className="text-sm">
+              <span className="font-semibold text-emerald-900">Primary voice is set.</span>{" "}
+              <span className="text-emerald-800">
+                Every campaign + outbound call uses{" "}
+                <span className="font-mono">
+                  {voices?.find((x) => x.id === defaults.primary_voice_id)?.name ?? defaults.primary_voice_id}
+                </span>{" "}
+                regardless of per-campaign settings.
+              </span>
+            </div>
+            <button
+              onClick={clearPrimary}
+              className="text-xs uppercase tracking-widest text-emerald-900 hover:text-emerald-700 border border-emerald-300 hover:border-emerald-500 rounded-md px-3 py-1.5"
+            >
+              Clear primary
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-1 space-y-4">
             <Card title="Voice library">
@@ -144,7 +194,9 @@ export default function VoiceLab() {
                       key={v.id}
                       voice={v}
                       selected={selected === v.id}
+                      isPrimary={defaults?.primary_voice_id === v.id}
                       onSelect={() => setSelected(v.id)}
+                      onMakePrimary={() => makePrimary(v)}
                       onDelete={async () => {
                         try {
                           await api.delete(`/voice/voices/${v.id}`);
@@ -224,50 +276,68 @@ export default function VoiceLab() {
 function VoiceCard({
   voice,
   selected,
+  isPrimary,
   onSelect,
+  onMakePrimary,
   onDelete,
 }: {
   voice: Voice;
   selected: boolean;
+  isPrimary: boolean;
   onSelect: () => void;
+  onMakePrimary: () => void;
   onDelete: () => void;
 }) {
   return (
     <div
       className={`rounded-lg border transition ${
-        selected
-          ? "border-dishhome-blue bg-dishhome-blue/5"
-          : "border-black/5 hover:border-dishhome-blue/30"
+        isPrimary
+          ? "border-emerald-400 bg-emerald-50/50"
+          : selected
+            ? "border-dishhome-blue bg-dishhome-blue/5"
+            : "border-black/5 hover:border-dishhome-blue/30"
       }`}
     >
-      <button
-        onClick={onSelect}
-        className="w-full text-left p-3"
-      >
-        <div className="flex items-center justify-between">
-          <span className="font-medium text-dishhome-blue">{voice.name}</span>
-          <Badge tone={voice.source === "uploaded" ? "warn" : "info"}>
-            {voice.source === "uploaded" ? "Custom" : "Built-in"}
-          </Badge>
+      <button onClick={onSelect} className="w-full text-left p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-medium text-dishhome-blue truncate">{voice.name}</span>
+          <div className="flex items-center gap-1 shrink-0">
+            {isPrimary && <Badge tone="success">★ Primary</Badge>}
+            <Badge tone={voice.source === "uploaded" ? "warn" : "info"}>
+              {voice.source === "uploaded" ? "Custom" : "Built-in"}
+            </Badge>
+          </div>
         </div>
         <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/50 mt-1">
           {voice.language === "ne" ? "Nepali" : "English"} · {voice.gender}
+          {voice.cloned && <span className="ml-2 text-emerald-700">· ElevenLabs cloned</span>}
         </div>
         <div className="text-xs text-dishhome-ink/60 mt-1">{voice.tone}</div>
       </button>
-      {voice.source === "uploaded" && (
-        <div className="px-3 pb-2 -mt-1">
+      <div className="px-3 pb-2 -mt-1 flex items-center gap-3">
+        {!isPrimary && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onMakePrimary();
+            }}
+            className="text-[11px] text-emerald-700 hover:underline"
+          >
+            Make primary
+          </button>
+        )}
+        {voice.source === "uploaded" && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               if (confirm(`Delete voice "${voice.name}"?`)) onDelete();
             }}
-            className="text-[11px] text-rose-600 hover:underline"
+            className="text-[11px] text-rose-600 hover:underline ml-auto"
           >
             Delete
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -278,6 +348,7 @@ function UploadCard({ onUploaded }: { onUploaded: () => void }) {
   const [language, setLanguage] = useState<"ne" | "en">("ne");
   const [gender, setGender] = useState<"female" | "male">("female");
   const [tone, setTone] = useState("warm, professional");
+  const [setAsPrimary, setSetAsPrimary] = useState(true);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const toast = useToast();
@@ -305,9 +376,15 @@ function UploadCard({ onUploaded }: { onUploaded: () => void }) {
     fd.append("language", language);
     fd.append("gender", gender);
     fd.append("tone", tone);
+    fd.append("set_as_primary", setAsPrimary ? "true" : "false");
     try {
       const v = await api.upload<Voice>("/voice/upload", fd);
-      toast.success("Voice uploaded", v.name);
+      toast.success(
+        "Voice uploaded",
+        setAsPrimary
+          ? `${v.name} is now the primary voice — every call uses it.`
+          : v.name,
+      );
       setFile(null);
       setName("");
       if (inputRef.current) inputRef.current.value = "";
@@ -397,6 +474,21 @@ function UploadCard({ onUploaded }: { onUploaded: () => void }) {
           onChange={(e) => setTone(e.target.value)}
           placeholder="warm, professional, confident…"
         />
+        <label className="flex items-start gap-2 text-xs text-dishhome-ink/80 mt-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={setAsPrimary}
+            onChange={(e) => setSetAsPrimary(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-medium">Use this voice everywhere</span>{" "}
+            <span className="text-dishhome-ink/60">
+              — sets it as Primary so every campaign + demo call + outbound
+              ring uses it automatically (you can change this later).
+            </span>
+          </span>
+        </label>
       </div>
 
       <Button
