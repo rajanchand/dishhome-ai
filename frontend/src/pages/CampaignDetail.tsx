@@ -4,6 +4,8 @@ import {
   api,
   type Campaign,
   type CampaignContact,
+  type CallSession,
+  type DemoCallResponse,
 } from "../lib/api";
 import {
   Badge,
@@ -237,22 +239,34 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 function DemoCallCard({ campaign }: { campaign: Campaign }) {
-  const [mobile, setMobile] = useState("9841234567");
+  const [mobile, setMobile] = useState("+447570731478");
   const [busy, setBusy] = useState(false);
+  const [session, setSession] = useState<CallSession | null>(null);
+  const [mode, setMode] = useState<"twilio" | "mock" | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const toast = useToast();
   const errToast = useAsyncErrorToast();
 
   async function call() {
     setBusy(true);
+    setSession(null);
+    setHint(null);
     try {
-      const r = await api.post<{ session_id: string }>(
+      const r = await api.post<DemoCallResponse>(
         `/campaigns/${campaign.id}/demo-call`,
         { mobile },
       );
-      toast.success(
-        "Demo call queued",
-        `Session ${r.session_id} → ${mobile}. The AI will read the script.`,
-      );
+      setMode(r.mode);
+      if (r.mode === "twilio") {
+        toast.success("Demo call placed", `Twilio CallSid ${r.call_sid} → ${mobile}`);
+      } else {
+        toast.info("Demo call (mock)", r.hint ?? `Session ${r.session_id} → ${mobile}`);
+        setHint(r.hint ?? null);
+      }
+      // Kick off polling for telephony sessions only when Twilio actually placed the call.
+      if (r.mode === "twilio") {
+        pollSession(r.session_id);
+      }
     } catch (e) {
       errToast(e, "Demo call failed");
     } finally {
@@ -260,23 +274,62 @@ function DemoCallCard({ campaign }: { campaign: Campaign }) {
     }
   }
 
+  async function pollSession(sid: string) {
+    const terminal = new Set(["completed", "failed", "busy", "no-answer", "canceled"]);
+    for (let i = 0; i < 60; i++) {
+      try {
+        const s = await api.get<CallSession>(`/telephony/sessions/${sid}`);
+        setSession(s);
+        if (terminal.has((s.status || "").toLowerCase())) return;
+      } catch {
+        // Silent: poll fail is recoverable.
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
   return (
     <Card title="Demo call">
       <p className="text-xs text-dishhome-ink/60 mb-3">
-        Dial a single number to QA the AI voice + script before launching the
-        full campaign.
+        Dial any number (use E.164 like <span className="font-mono">+447570731478</span>) to
+        QA the AI voice + script before launching the full campaign.
       </p>
       <div className="flex gap-2">
         <Input
           value={mobile}
           onChange={(e) => setMobile(e.target.value)}
-          placeholder="9841234567"
+          placeholder="+447570731478"
           className="flex-1"
         />
         <Button onClick={call} disabled={busy || !mobile.trim()}>
           {busy ? "Dialing…" : "▶ Demo call"}
         </Button>
       </div>
+      {mode === "mock" && hint && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 text-xs">
+          <div className="font-semibold mb-0.5">Running in mock mode</div>
+          {hint}
+        </div>
+      )}
+      {session && (
+        <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs space-y-0.5">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-sky-900">Live call</span>
+            <span className="font-mono text-[10px] text-sky-700">{session.session_id}</span>
+          </div>
+          <div>Status: <span className="font-mono">{session.status}</span></div>
+          {session.call_sid && (
+            <div>Twilio SID: <span className="font-mono">{session.call_sid}</span></div>
+          )}
+          <div>To: <span className="font-mono">{session.to}</span></div>
+          {session.duration_sec !== null && session.duration_sec !== undefined && (
+            <div>Duration: {session.duration_sec}s</div>
+          )}
+          {session.error && (
+            <div className="text-rose-700">Error: {session.error}</div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

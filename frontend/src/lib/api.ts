@@ -87,6 +87,70 @@ export interface User {
   name: string;
   email: string;
   role: string;
+  permissions?: string[];
+}
+
+// ---- Admin / RBAC ----
+export interface AdminUser {
+  username: string;
+  name: string;
+  email: string;
+  role: string;
+  permissions: string[];
+  created_at?: string | null;
+  created_by?: string | null;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  permissions: string[];
+  user_count: number;
+}
+
+// ---- Telephony ----
+export interface TelephonyHealth {
+  twilio_enabled: boolean;
+  from_number: string | null;
+  public_base_url: string | null;
+  elevenlabs_enabled: boolean;
+}
+
+export interface CallSession {
+  session_id: string;
+  call_sid: string | null;
+  to: string;
+  from_: string;
+  voice_id: string;
+  language: string;
+  text: string;
+  status: string;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_sec: number | null;
+  campaign_id: string | null;
+  recording_url: string | null;
+}
+
+export interface DemoCallResponse {
+  mode: "twilio" | "mock";
+  campaign_id: string;
+  to: string;
+  voice_id: string;
+  language: string;
+  session_id: string;
+  call_sid?: string | null;
+  status: string;
+  script_preview?: string;
+  hint?: string;
+}
+
+export interface VoiceHealth {
+  elevenlabs_enabled: boolean;
+  model_id: string;
+  defaults_set: Record<string, boolean>;
 }
 
 export interface LoginResponse {
@@ -137,6 +201,8 @@ export interface Voice {
   source?: "builtin" | "uploaded";
   sample_url?: string | null;
   created_at?: string | null;
+  elevenlabs_voice_id?: string | null;
+  cloned?: boolean;
 }
 
 export interface VoicePreviewResponse {
@@ -147,6 +213,8 @@ export interface VoicePreviewResponse {
   rate: number;
   pitch: number;
   sample_url?: string | null;
+  audio_url?: string | null;
+  engine?: "elevenlabs" | "browser-tts";
 }
 
 export interface Customer {

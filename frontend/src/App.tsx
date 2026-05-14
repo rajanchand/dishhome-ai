@@ -23,6 +23,7 @@ import FAQs from "./pages/FAQs";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import SavedReplies from "./pages/SavedReplies";
+import AccessPortal from "./pages/AccessPortal";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -67,6 +68,7 @@ export default function App() {
                 <Route path="voice" element={<VoiceLab />} />
                 <Route path="integrations" element={<Integrations />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="admin/access" element={<AccessPortal />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

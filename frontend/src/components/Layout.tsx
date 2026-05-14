@@ -41,7 +41,10 @@ const NAV: NavGroup[] = [
   },
   {
     title: "Admin",
-    items: [{ to: "/settings", label: "Settings", icon: "⚒" }],
+    items: [
+      { to: "/admin/access", label: "Access Portal", icon: "🛡" },
+      { to: "/settings", label: "Settings", icon: "⚒" },
+    ],
   },
 ];
 

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.observability import install as install_observability
 from app.routers import (
+    admin,
     auth,
     calls,
     campaigns,
@@ -13,6 +14,7 @@ from app.routers import (
     inbox,
     integrations,
     metrics,
+    telephony,
     voice,
 )
 
@@ -44,3 +46,5 @@ app.include_router(huawei.router)
 app.include_router(faqs.router)
 app.include_router(campaigns.router)
 app.include_router(inbox.router)
+app.include_router(admin.router)
+app.include_router(telephony.router)

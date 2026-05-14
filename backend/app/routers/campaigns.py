@@ -221,14 +221,44 @@ def delete_contact(
 
 
 @router.post("/{camp_id}/demo-call")
-def demo_call(
+async def demo_call(
     camp_id: str,
     payload: DemoCallRequest,
-    _: Annotated[UserOut, Depends(current_user)],
-) -> dict[str, str]:
-    """Dial a single number with the campaign script — for QA before launch."""
+    user: Annotated[UserOut, Depends(current_user)],
+) -> dict:
+    """Dial a single number with the campaign script — for QA before launch.
+
+    When Twilio is configured (TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM_NUMBER + a
+    PUBLIC_BASE_URL via ngrok), this places a real call. Otherwise it returns
+    a mock queued response so the UI demo still works.
+    """
+    from app.config import settings
     c = _find(camp_id)
+    if settings.twilio_enabled and settings.public_base_url:
+        from app.routers.telephony import OriginateRequest, originate
+        sess = await originate(
+            OriginateRequest(
+                to=payload.mobile,
+                voice_id=c["voice_id"],
+                text=c["script"],
+                language=c["language"],
+                record=False,
+                campaign_id=c["id"],
+            ),
+            user=user,
+        )
+        return {
+            "mode": "twilio",
+            "campaign_id": c["id"],
+            "to": payload.mobile,
+            "voice_id": c["voice_id"],
+            "language": c["language"],
+            "session_id": sess.session_id,
+            "call_sid": sess.call_sid,
+            "status": sess.status,
+        }
     return {
+        "mode": "mock",
         "campaign_id": c["id"],
         "to": payload.mobile,
         "voice_id": c["voice_id"],
@@ -236,6 +266,7 @@ def demo_call(
         "script_preview": c["script"][:120],
         "status": "queued",
         "session_id": _new_id("demo"),
+        "hint": "Set TWILIO_* and PUBLIC_BASE_URL in backend/.env to place a real call.",
     }
 
 
