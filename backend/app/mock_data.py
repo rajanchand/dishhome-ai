@@ -910,7 +910,7 @@ VOICES: list[dict] = [
 USERS = {
     "admin": {
         "username": "admin",
-        "password": "dishhome123",
+        "password": "dishhome123",  # hashed in-place on first import (see _migrate_seed_passwords)
         "name": "Rajan Chand",
         "email": "rajanchand48@gmail.com",
         "role": "super_admin",
@@ -930,6 +930,20 @@ USERS = {
         "role": "agent",
     },
 }
+
+
+def _migrate_seed_passwords() -> None:
+    """Hash any plaintext seed passwords on first import."""
+    # Imported here to avoid a circular dep at module import time.
+    from app.security import hash_password, is_hashed
+
+    for u in USERS.values():
+        pw = u.get("password")
+        if pw and not is_hashed(pw):
+            u["password"] = hash_password(pw)
+
+
+_migrate_seed_passwords()
 
 
 # ============================================================

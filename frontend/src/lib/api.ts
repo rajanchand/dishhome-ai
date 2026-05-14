@@ -156,6 +156,7 @@ export interface VoiceHealth {
 export interface LoginResponse {
   token: string;
   user: User;
+  expires_in: number;
 }
 
 export interface CallSummary {

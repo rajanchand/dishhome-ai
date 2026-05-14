@@ -1,22 +1,30 @@
 """Admin: user + role management.
 
-Only users with `users.manage` (super_admin / admin) can hit these endpoints.
-Roles themselves are defined in code (rbac.py) for auditability; this router
-lets admins assign roles to users, not invent new ones.
+All endpoints require the `users.manage` permission. Mutations are logged
+to the audit ring (visible at /admin/audit-log).
 """
 
-import secrets
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.mock_data import USERS
 from app.rbac import ROLE_ORDER, ROLE_PERMISSIONS, permissions_for
-from app.routers.auth import UserOut, require_permission, revoke_user_sessions
+from app.routers.auth import UserOut, require_permission
+from app.security import (
+    audit,
+    audit_log,
+    hash_password,
+    issue_session,
+    revoke_user_sessions,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Literal type for role validation (Pydantic gives clean 422 error)
+RoleLiteral = Literal["super_admin", "admin", "supervisor", "agent"]
 
 
 class AdminUser(BaseModel):
@@ -33,18 +41,37 @@ class CreateUserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=40, pattern=r"^[a-z0-9_.-]+$")
     name: str = Field(min_length=2, max_length=80)
     email: EmailStr
-    role: str
+    role: RoleLiteral
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def _normalize_username(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def _password_strength(cls, v: str) -> str:
+        if v.isdigit() or v.isalpha():
+            raise ValueError("password must mix letters and numbers")
+        return v
 
 
 class UpdateUserRequest(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=2, max_length=80)
     email: EmailStr | None = None
-    role: str | None = None
+    role: RoleLiteral | None = None
 
 
 class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def _password_strength(cls, v: str) -> str:
+        if v.isdigit() or v.isalpha():
+            raise ValueError("password must mix letters and numbers")
+        return v
 
 
 class RoleOut(BaseModel):
@@ -52,6 +79,14 @@ class RoleOut(BaseModel):
     name: str
     permissions: list[str]
     user_count: int
+
+
+class AuditEntry(BaseModel):
+    at: float
+    actor: str
+    action: str
+    target: str
+    detail: str = ""
 
 
 def _to_admin_user(u: dict) -> AdminUser:
@@ -66,19 +101,21 @@ def _to_admin_user(u: dict) -> AdminUser:
     )
 
 
-def _check_role(role: str) -> None:
-    if role not in ROLE_PERMISSIONS:
-        raise HTTPException(
-            400, f"Unknown role {role!r}. Allowed: {', '.join(ROLE_ORDER)}"
-        )
-
-
 def _can_target(actor: UserOut, target_role: str) -> None:
     """Admins can manage anyone except other super_admins; super_admins manage all."""
     if actor.role == "super_admin":
         return
     if target_role == "super_admin":
         raise HTTPException(403, "Only super_admin can manage super_admin users")
+
+
+def _last_super_admin_guard(username_being_changed: str) -> None:
+    others = [
+        u for u in USERS.values()
+        if u["role"] == "super_admin" and u["username"] != username_being_changed
+    ]
+    if not others:
+        raise HTTPException(409, "Cannot remove the last super_admin")
 
 
 @router.get("/users", response_model=list[AdminUser])
@@ -93,14 +130,13 @@ def create_user(
     payload: CreateUserRequest,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
 ) -> AdminUser:
-    _check_role(payload.role)
     _can_target(actor, payload.role)
-    uname = payload.username.lower()
+    uname = payload.username  # already lowercased by validator
     if uname in USERS:
         raise HTTPException(409, f"User {uname!r} already exists")
     entry = {
         "username": uname,
-        "password": payload.password,
+        "password": hash_password(payload.password),
         "name": payload.name.strip(),
         "email": str(payload.email),
         "role": payload.role,
@@ -108,6 +144,7 @@ def create_user(
         "created_by": actor.username,
     }
     USERS[uname] = entry
+    audit(actor=actor.username, action="user.create", target=uname, detail=f"role={payload.role}")
     return _to_admin_user(entry)
 
 
@@ -117,24 +154,29 @@ def update_user(
     payload: UpdateUserRequest,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
 ) -> AdminUser:
-    u = USERS.get(username.lower())
+    uname = username.strip().lower()
+    u = USERS.get(uname)
     if not u:
         raise HTTPException(404, "User not found")
     _can_target(actor, u["role"])
-    if payload.role is not None:
-        _check_role(payload.role)
-        _can_target(actor, payload.role)
-        # Prevent demoting the last super_admin.
-        if u["role"] == "super_admin" and payload.role != "super_admin":
-            others = [x for x in USERS.values() if x["role"] == "super_admin" and x["username"] != u["username"]]
-            if not others:
-                raise HTTPException(409, "Cannot remove the last super_admin")
-        u["role"] = payload.role
+    update = payload.model_dump(exclude_unset=True, exclude_none=True)
+    changed: list[str] = []
+    if "role" in update and update["role"] != u["role"]:
+        new_role = update["role"]
+        _can_target(actor, new_role)
+        if u["role"] == "super_admin" and new_role != "super_admin":
+            _last_super_admin_guard(u["username"])
+        u["role"] = new_role
         revoke_user_sessions(u["username"])
-    if payload.name is not None:
-        u["name"] = payload.name.strip()
-    if payload.email is not None:
-        u["email"] = str(payload.email)
+        changed.append(f"role={new_role}")
+    if "name" in update:
+        u["name"] = update["name"].strip()
+        changed.append("name")
+    if "email" in update:
+        u["email"] = str(update["email"])
+        changed.append("email")
+    if changed:
+        audit(actor=actor.username, action="user.update", target=u["username"], detail=",".join(changed))
     return _to_admin_user(u)
 
 
@@ -143,7 +185,7 @@ def delete_user(
     username: str,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
 ) -> None:
-    uname = username.lower()
+    uname = username.strip().lower()
     u = USERS.get(uname)
     if not u:
         raise HTTPException(404, "User not found")
@@ -151,11 +193,10 @@ def delete_user(
         raise HTTPException(409, "You cannot delete yourself")
     _can_target(actor, u["role"])
     if u["role"] == "super_admin":
-        others = [x for x in USERS.values() if x["role"] == "super_admin" and x["username"] != uname]
-        if not others:
-            raise HTTPException(409, "Cannot delete the last super_admin")
+        _last_super_admin_guard(uname)
     USERS.pop(uname, None)
     revoke_user_sessions(uname)
+    audit(actor=actor.username, action="user.delete", target=uname)
 
 
 @router.post("/users/{username}/reset-password")
@@ -163,14 +204,16 @@ def reset_password(
     username: str,
     payload: ResetPasswordRequest,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
-) -> dict[str, str]:
-    u = USERS.get(username.lower())
+) -> dict[str, int | str]:
+    uname = username.strip().lower()
+    u = USERS.get(uname)
     if not u:
         raise HTTPException(404, "User not found")
     _can_target(actor, u["role"])
-    u["password"] = payload.new_password
+    u["password"] = hash_password(payload.new_password)
     revoked = revoke_user_sessions(u["username"])
-    return {"status": "password_reset", "username": u["username"], "revoked_sessions": str(revoked)}
+    audit(actor=actor.username, action="user.reset_password", target=u["username"], detail=f"revoked={revoked}")
+    return {"status": "password_reset", "username": u["username"], "revoked_sessions": revoked}
 
 
 @router.get("/roles", response_model=list[RoleOut])
@@ -197,17 +240,24 @@ def list_roles(
     ]
 
 
+@router.get("/audit-log", response_model=list[AuditEntry])
+def get_audit_log(
+    _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    limit: int = 100,
+) -> list[AuditEntry]:
+    return [AuditEntry(**e) for e in audit_log(limit=max(1, min(limit, 500)))]
+
+
 @router.post("/users/_seed-token")
 def issue_token_for_user(
     username: str,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
 ) -> dict[str, str]:
-    """Diagnostic: mint a session token for another user (for impersonation/testing).
-    Super_admin only."""
+    """Diagnostic: mint a session token for another user (super_admin only)."""
     if actor.role != "super_admin":
         raise HTTPException(403, "Only super_admin may impersonate")
-    from app.routers.auth import issue_session
-    u = USERS.get(username.lower())
+    u = USERS.get(username.strip().lower())
     if not u:
         raise HTTPException(404, "User not found")
+    audit(actor=actor.username, action="user.impersonate", target=u["username"])
     return {"token": issue_session(u["username"]), "username": u["username"]}

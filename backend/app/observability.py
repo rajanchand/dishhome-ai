@@ -132,8 +132,32 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         )
         response.headers["x-request-id"] = rid
         response.headers["x-process-time-ms"] = f"{duration_ms:.1f}"
+        _apply_security_headers(response)
         request_id_var.reset(token)
         return response
+
+
+def _apply_security_headers(response) -> None:
+    """Defense-in-depth headers. Cheap to add, hard to forget later."""
+    # Block MIME sniffing.
+    response.headers.setdefault("x-content-type-options", "nosniff")
+    # Don't leak referrer URLs cross-origin.
+    response.headers.setdefault("referrer-policy", "no-referrer")
+    # Disable the legacy XSS auditor (it's been removed from modern browsers but
+    # some intermediaries still respect 0 = off).
+    response.headers.setdefault("x-xss-protection", "0")
+    # Deny framing so the portal can't be wrapped in a clickjacking iframe.
+    response.headers.setdefault("x-frame-options", "DENY")
+    # Restrict the set of powerful APIs unless explicitly granted.
+    response.headers.setdefault(
+        "permissions-policy",
+        "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+    )
+    # HSTS only makes sense when served over HTTPS; harmless when not.
+    response.headers.setdefault(
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains",
+    )
 
 
 # ---------------- Structured error handlers ----------------
@@ -165,6 +189,37 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
     )
 
 
+_SENSITIVE_KEYS = {"password", "new_password", "current_password", "token", "auth_token"}
+
+
+def _json_safe(v):
+    """Pydantic v2 sometimes puts non-serializable objects (e.g. the raw
+    ValueError) into a detail's `ctx`. Stringify anything JSON can't handle."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    return str(v)
+
+
+def _scrub(detail: dict) -> dict:
+    """Mask the input value when the field name is sensitive — so a 422 on
+    password validation doesn't echo the attempted password back to the client."""
+    out = _json_safe(detail)
+    if not isinstance(out, dict):
+        return {"detail": out}
+    loc = out.get("loc") or []
+    last = str(loc[-1]) if loc else ""
+    if last.lower() in _SENSITIVE_KEYS:
+        if "input" in out:
+            out["input"] = "***"
+        if isinstance(out.get("ctx"), dict):
+            out["ctx"] = {k: ("***" if "value" in k.lower() else v) for k, v in out["ctx"].items()}
+    return out
+
+
 async def validation_exception_handler(
     _: Request, exc: RequestValidationError
 ) -> JSONResponse:
@@ -176,7 +231,7 @@ async def validation_exception_handler(
                 "message": "Request payload failed validation",
                 "request_id": request_id_var.get(),
                 "status": 422,
-                "details": exc.errors(),
+                "details": [_scrub(e) for e in exc.errors()],
             }
         },
     )

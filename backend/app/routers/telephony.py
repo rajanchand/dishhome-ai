@@ -14,6 +14,10 @@ the call still works — Twilio just uses its built-in <Say> voice.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Annotated, Literal
@@ -22,21 +26,31 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.routers.auth import UserOut, current_user, require_permission
+
+E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
 router = APIRouter(prefix="/telephony", tags=["telephony"])
 
 
 class OriginateRequest(BaseModel):
     to: str = Field(min_length=8, max_length=20, description="E.164 number, e.g. +447570731478")
-    voice_id: str = Field(min_length=1)
+    voice_id: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.-]+$")
     text: str = Field(min_length=1, max_length=600)
     language: Literal["ne", "en"] = "ne"
     record: bool = False
-    campaign_id: str | None = None
+    campaign_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_.-]*$")
+
+    @field_validator("to")
+    @classmethod
+    def _e164(cls, v: str) -> str:
+        v = v.strip().replace(" ", "").replace("-", "")
+        if not E164_RE.match(v):
+            raise ValueError("number must be E.164, e.g. +447570731478")
+        return v
 
 
 class CallSession(BaseModel):
@@ -235,11 +249,47 @@ def get_session(
     return _to_public(s)
 
 
-# ---- public webhooks (no auth — Twilio calls these) ----
+# ---- public webhooks (Twilio calls these — gated by signature) ----
+
+def _verify_twilio_signature(request: Request, form_params: dict[str, str] | None = None) -> None:
+    """Validate Twilio's X-Twilio-Signature header.
+
+    https://www.twilio.com/docs/usage/security#validating-requests
+    The signature is HMAC-SHA1 of (url + sorted concatenated form params)
+    keyed by the account auth_token, base64-encoded.
+
+    Skips validation when twilio_validate_signatures is False (dev/test).
+    """
+    if not settings.twilio_validate_signatures:
+        return
+    if not settings.twilio_auth_token:
+        # Without an auth token we have nothing to validate against — refuse.
+        raise HTTPException(503, "Cannot validate Twilio signature: TWILIO_AUTH_TOKEN unset")
+    sig = request.headers.get("x-twilio-signature", "")
+    if not sig:
+        raise HTTPException(401, "Missing X-Twilio-Signature")
+    # Twilio signs the full URL Twilio used to reach us. If we're behind ngrok
+    # or another proxy, PUBLIC_BASE_URL is the authoritative host.
+    path = request.url.path
+    query = ("?" + request.url.query) if request.url.query else ""
+    base = settings.public_base_url.rstrip("/") if settings.public_base_url else str(request.base_url).rstrip("/")
+    full_url = f"{base}{path}{query}"
+    payload = full_url
+    if form_params:
+        for k in sorted(form_params.keys()):
+            payload += k + form_params[k]
+    mac = hmac.new(settings.twilio_auth_token.encode("utf-8"), payload.encode("utf-8"), hashlib.sha1)
+    expected = base64.b64encode(mac.digest()).decode("ascii")
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(401, "Twilio signature mismatch")
+
 
 @router.get("/twiml/{session_id}")
-def twiml(session_id: str) -> Response:
+def twiml(session_id: str, request: Request) -> Response:
     """TwiML Twilio fetches when the call is answered."""
+    _verify_twilio_signature(request)
+    if not re.match(r"^sess_[A-Za-z0-9_-]{8,32}$", session_id):
+        raise HTTPException(400, "Bad session_id")
     s = SESSIONS.get(session_id)
     if not s:
         return Response(
@@ -274,7 +324,11 @@ def twiml(session_id: str) -> Response:
 @router.post("/status/{session_id}")
 async def status_callback(session_id: str, request: Request) -> Response:
     """Twilio status webhook. Updates the session record."""
+    if not re.match(r"^sess_[A-Za-z0-9_-]{8,32}$", session_id):
+        raise HTTPException(400, "Bad session_id")
     form = await request.form()
+    form_params = {k: str(v) for k, v in form.multi_items()}
+    _verify_twilio_signature(request, form_params=form_params)
     s = SESSIONS.get(session_id)
     if not s:
         return Response(status_code=204)

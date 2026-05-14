@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""  # e.g. "+15005550006" (Twilio test) or your real number
+    # When False, /telephony webhooks accept unsigned requests (dev only).
+    # Always True in production — the auth_token is then used to validate the
+    # X-Twilio-Signature header.
+    twilio_validate_signatures: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

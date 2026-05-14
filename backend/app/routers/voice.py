@@ -213,13 +213,19 @@ async def tts(
 async def tts_public(voice_id: str, text: str, token: str = "") -> Response:
     """Unauthenticated TTS used by Twilio TwiML <Play>.
 
-    The token is a short opaque shared secret (the call session_id) so random
-    callers can't burn ElevenLabs credits. Twilio fetches this URL from the
-    public_base_url to play audio into the call.
+    The token must match an active telephony session. We additionally require
+    that (voice_id, text) match the session's bound parameters — preventing
+    a leaked token from synthesizing arbitrary text against the operator's
+    ElevenLabs credit.
     """
-    # Twilio is the only caller. We still validate the voice exists.
-    if not token or len(token) < 8:
-        raise HTTPException(401, "Missing or invalid session token")
+    if not token:
+        raise HTTPException(401, "Missing session token")
+    from app.routers.telephony import SESSIONS  # local import: avoid cycle
+    sess = SESSIONS.get(token)
+    if not sess:
+        raise HTTPException(401, "Unknown or expired session token")
+    if sess.get("voice_id") != voice_id or sess.get("text") != text:
+        raise HTTPException(403, "Token not bound to this voice/text")
     voice = _find_voice(voice_id)
     if not voice:
         raise HTTPException(404, "Voice not found")
@@ -323,7 +329,7 @@ def get_sample(
 
 
 @router.delete("/voices/{voice_id}", status_code=204)
-def delete_voice(
+async def delete_voice(
     voice_id: str,
     _: Annotated[UserOut, Depends(require_permission("voice.upload"))],
 ) -> None:
@@ -334,3 +340,13 @@ def delete_voice(
     path = UPLOAD_DIR / target["_filename"]
     path.unlink(missing_ok=True)
     _save_uploaded([v for v in items if v["id"] != voice_id])
+    # Best-effort cleanup of the remote ElevenLabs clone so we don't leak
+    # storage / credit on their side. Don't fail the local delete if remote
+    # cleanup fails.
+    remote_id = target.get("elevenlabs_voice_id")
+    if remote_id and settings.elevenlabs_enabled:
+        from app.elevenlabs_client import delete_remote_voice
+        try:
+            await delete_remote_voice(remote_id)
+        except Exception as e:
+            print(f"[voice] remote ElevenLabs delete failed for {remote_id}: {e}")

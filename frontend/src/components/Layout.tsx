@@ -6,11 +6,13 @@ interface NavItem {
   to: string;
   label: string;
   icon: string;
+  requires?: string; // permission required to see this link
 }
 
 interface NavGroup {
   title: string;
   items: NavItem[];
+  requires?: string;
 }
 
 const NAV: NavGroup[] = [
@@ -18,39 +20,54 @@ const NAV: NavGroup[] = [
     title: "Operations",
     items: [
       { to: "/", label: "Dashboard", icon: "▦" },
-      { to: "/calls", label: "Live Calls", icon: "☏" },
-      { to: "/inbox", label: "Inbox", icon: "✉" },
+      { to: "/calls", label: "Live Calls", icon: "☏", requires: "calls.read" },
+      { to: "/inbox", label: "Inbox", icon: "✉", requires: "inbox.read" },
     ],
   },
   {
     title: "Customers",
     items: [
-      { to: "/customers", label: "Demo Customers", icon: "👥" },
-      { to: "/contacts", label: "Contacts", icon: "♟" },
+      { to: "/customers", label: "Demo Customers", icon: "👥", requires: "customers.read" },
+      { to: "/contacts", label: "Contacts", icon: "♟", requires: "contacts.read" },
       { to: "/integrations", label: "DishHome System", icon: "⚙" },
     ],
   },
   {
     title: "AI",
     items: [
-      { to: "/voice", label: "Voice Lab", icon: "♪" },
-      { to: "/faqs", label: "FAQs", icon: "?" },
-      { to: "/campaigns", label: "Campaigns", icon: "✈" },
-      { to: "/saved-replies", label: "Saved Replies", icon: "↪" },
+      { to: "/voice", label: "Voice Lab", icon: "♪", requires: "voice.read" },
+      { to: "/faqs", label: "FAQs", icon: "?", requires: "faqs.read" },
+      { to: "/campaigns", label: "Campaigns", icon: "✈", requires: "campaigns.read" },
+      { to: "/saved-replies", label: "Saved Replies", icon: "↪", requires: "inbox.read" },
     ],
   },
   {
     title: "Admin",
+    requires: "users.manage",
     items: [
-      { to: "/admin/access", label: "Access Portal", icon: "🛡" },
+      { to: "/admin/access", label: "Access Portal", icon: "🛡", requires: "users.manage" },
       { to: "/settings", label: "Settings", icon: "⚒" },
     ],
   },
 ];
 
+function hasPerm(perms: string[] | undefined, required: string | undefined): boolean {
+  if (!required) return true;
+  return !!perms?.includes(required);
+}
+
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const perms = user?.permissions ?? [];
+
+  const visibleGroups = NAV
+    .filter((g) => hasPerm(perms, g.requires))
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((i) => hasPerm(perms, i.requires)),
+    }))
+    .filter((g) => g.items.length > 0);
 
   return (
     <div className="min-h-screen flex bg-dishhome-mist">
@@ -63,7 +80,7 @@ export default function Layout() {
         </Link>
 
         <nav className="flex-1 py-4 overflow-y-auto">
-          {NAV.map((group) => (
+          {visibleGroups.map((group) => (
             <div key={group.title} className="mb-4">
               <div className="px-6 mb-1.5 text-[10px] uppercase tracking-widest text-white/40 font-semibold">
                 {group.title}
