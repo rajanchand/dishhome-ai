@@ -57,3 +57,4 @@ recordings/
 
 # Runtime artifacts (backend creates this dir on startup)
 backend/voice_uploads/
+frontend/.env.local
