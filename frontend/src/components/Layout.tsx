@@ -2,12 +2,47 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { DishHomeLogo } from "./Logo";
 
-const NAV = [
-  { to: "/", label: "Dashboard", icon: "▦" },
-  { to: "/calls", label: "Live Calls", icon: "☏" },
-  { to: "/voice", label: "Voice Lab", icon: "♪" },
-  { to: "/integrations", label: "DishHome Integration", icon: "⚙" },
-  { to: "/settings", label: "Settings", icon: "⚒" },
+interface NavItem {
+  to: string;
+  label: string;
+  icon: string;
+}
+
+interface NavGroup {
+  title: string;
+  items: NavItem[];
+}
+
+const NAV: NavGroup[] = [
+  {
+    title: "Operations",
+    items: [
+      { to: "/", label: "Dashboard", icon: "▦" },
+      { to: "/calls", label: "Live Calls", icon: "☏" },
+      { to: "/inbox", label: "Inbox", icon: "✉" },
+    ],
+  },
+  {
+    title: "Customers",
+    items: [
+      { to: "/customers", label: "Demo Customers", icon: "👥" },
+      { to: "/contacts", label: "Contacts", icon: "♟" },
+      { to: "/integrations", label: "DishHome System", icon: "⚙" },
+    ],
+  },
+  {
+    title: "AI",
+    items: [
+      { to: "/voice", label: "Voice Lab", icon: "♪" },
+      { to: "/faqs", label: "FAQs", icon: "?" },
+      { to: "/campaigns", label: "Campaigns", icon: "✈" },
+      { to: "/saved-replies", label: "Saved Replies", icon: "↪" },
+    ],
+  },
+  {
+    title: "Admin",
+    items: [{ to: "/settings", label: "Settings", icon: "⚒" }],
+  },
 ];
 
 export default function Layout() {
@@ -24,23 +59,30 @@ export default function Layout() {
           <DishHomeLogo />
         </Link>
 
-        <nav className="flex-1 py-4">
-          {NAV.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.to === "/"}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-6 py-2.5 text-sm transition ${
-                  isActive
-                    ? "bg-white/10 border-l-2 border-dishhome-orange text-white"
-                    : "border-l-2 border-transparent text-white/75 hover:bg-white/5 hover:text-white"
-                }`
-              }
-            >
-              <span className="w-4 text-center text-white/60">{n.icon}</span>
-              {n.label}
-            </NavLink>
+        <nav className="flex-1 py-4 overflow-y-auto">
+          {NAV.map((group) => (
+            <div key={group.title} className="mb-4">
+              <div className="px-6 mb-1.5 text-[10px] uppercase tracking-widest text-white/40 font-semibold">
+                {group.title}
+              </div>
+              {group.items.map((n) => (
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  end={n.to === "/"}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-6 py-2 text-sm transition ${
+                      isActive
+                        ? "bg-white/10 border-l-2 border-dishhome-orange text-white"
+                        : "border-l-2 border-transparent text-white/75 hover:bg-white/5 hover:text-white"
+                    }`
+                  }
+                >
+                  <span className="w-4 text-center text-white/60">{n.icon}</span>
+                  {n.label}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 

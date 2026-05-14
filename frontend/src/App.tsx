@@ -16,6 +16,13 @@ import CallDetail from "./pages/CallDetail";
 import VoiceLab from "./pages/VoiceLab";
 import Integrations from "./pages/Integrations";
 import Settings from "./pages/Settings";
+import Inbox from "./pages/Inbox";
+import Customers from "./pages/Customers";
+import Contacts from "./pages/Contacts";
+import FAQs from "./pages/FAQs";
+import Campaigns from "./pages/Campaigns";
+import CampaignDetail from "./pages/CampaignDetail";
+import SavedReplies from "./pages/SavedReplies";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -50,6 +57,13 @@ export default function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="calls" element={<Calls />} />
                 <Route path="calls/:id" element={<CallDetail />} />
+                <Route path="inbox" element={<Inbox />} />
+                <Route path="customers" element={<Customers />} />
+                <Route path="contacts" element={<Contacts />} />
+                <Route path="faqs" element={<FAQs />} />
+                <Route path="campaigns" element={<Campaigns />} />
+                <Route path="campaigns/:id" element={<CampaignDetail />} />
+                <Route path="saved-replies" element={<SavedReplies />} />
                 <Route path="voice" element={<VoiceLab />} />
                 <Route path="integrations" element={<Integrations />} />
                 <Route path="settings" element={<Settings />} />

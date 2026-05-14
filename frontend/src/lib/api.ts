@@ -75,6 +75,7 @@ export const api = {
   get: <T>(p: string, signal?: AbortSignal) => request<T>("GET", p, { signal }),
   post: <T>(p: string, body?: unknown, signal?: AbortSignal) =>
     request<T>("POST", p, { body, signal }),
+  patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, { body }),
   delete: <T>(p: string) => request<T>("DELETE", p),
   upload: <T>(p: string, formData: FormData, signal?: AbortSignal) =>
     request<T>("POST", p, { formData, signal }),
@@ -192,6 +193,163 @@ export interface MetricsSnapshot {
   errors_by_status: Record<string, number>;
   top_routes: [string, number][];
   window_size?: number;
+}
+
+// ---- Huawei ----
+export interface HuaweiOnt {
+  ont_id: string;
+  device_model: string;
+  serial_number: string;
+  firmware_version: string;
+  hardware_version: string;
+  olt_id: string;
+  olt_port: string;
+  ont_index: number;
+  online: boolean;
+  rx_power_dbm: number | null;
+  tx_power_dbm: number | null;
+  line_attenuation_db: number | null;
+  uptime_hours: number;
+  last_reboot: string;
+  pppoe_session: string;
+  wifi_radio_2g: boolean;
+  wifi_radio_5g: boolean;
+  error_state: string | null;
+  area_outage: boolean;
+}
+
+export interface HuaweiOlt {
+  olt_id: string;
+  site: string;
+  online: boolean;
+  active_onts: number;
+  uptime_hours: number;
+  degraded?: boolean;
+}
+
+export interface Diagnosis {
+  customer_id: string;
+  ont_id: string;
+  scenario: string;
+  headline: string;
+  tone: "info" | "warn" | "danger" | "success";
+  advice: string;
+  recommended_action:
+    | "remote_reboot"
+    | "wait_for_outage"
+    | "escalate_noc"
+    | "dispatch_field"
+    | "reauth_pppoe"
+    | "remote_wifi_toggle"
+    | "none";
+  ont: HuaweiOnt;
+  olt: HuaweiOlt | null;
+}
+
+export interface DemoCustomer {
+  customer_id: string;
+  name: string;
+  mobile: string;
+  address: string;
+  package: string;
+  ont_id: string;
+  device_model: string | null;
+  scenario: string;
+  headline: string;
+  tone: "info" | "warn" | "danger" | "success";
+  online: boolean;
+  rx_power_dbm: number | null;
+}
+
+// ---- FAQs ----
+export interface Faq {
+  id: string;
+  question_en?: string | null;
+  question_ne?: string | null;
+  answer_en?: string | null;
+  answer_ne?: string | null;
+  category?: string | null;
+  tags: string[];
+}
+
+export interface FaqAskResponse {
+  query: string;
+  language: string;
+  answer: string | null;
+  matched: { faq: Faq; score: number }[];
+}
+
+// ---- Campaigns ----
+export interface CampaignStats {
+  dialed: number;
+  connected: number;
+  completed: number;
+  failed: number;
+}
+
+export interface Campaign {
+  id: string;
+  name: string;
+  language: "ne" | "en";
+  voice_id: string;
+  script: string;
+  status: "draft" | "running" | "paused" | "completed";
+  contacts_count: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  stats: CampaignStats;
+}
+
+export interface CampaignContact {
+  id: string;
+  name: string;
+  mobile: string;
+  status: string;
+  attempts: number;
+  outcome: string | null;
+}
+
+// ---- Inbox ----
+export interface Label {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface SavedReply {
+  id: string;
+  title: string;
+  body: string;
+  language: "ne" | "en";
+}
+
+export interface Contact {
+  id: string;
+  name: string;
+  mobile: string;
+  email: string | null;
+  customer_id: string | null;
+  labels: string[];
+  last_contacted_at: string | null;
+  notes?: string | null;
+}
+
+export interface Message {
+  author: "customer" | "ai" | "agent";
+  at: string;
+  body: string;
+}
+
+export interface Conversation {
+  id: string;
+  channel: "voice" | "sms" | "whatsapp" | "web";
+  contact_id: string;
+  subject: string;
+  labels: string[];
+  status: "open" | "closed";
+  last_message_at: string;
+  messages: Message[];
 }
 
 // Resolve absolute URL for sample playback (audio elements need full URL)

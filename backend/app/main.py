@@ -3,11 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.observability import install as install_observability
-from app.routers import auth, calls, health, integrations, metrics, voice
+from app.routers import (
+    auth,
+    calls,
+    campaigns,
+    faqs,
+    health,
+    huawei,
+    inbox,
+    integrations,
+    metrics,
+    voice,
+)
 
 app = FastAPI(
     title="DishHome AI Call Center",
-    version="0.2.0",
+    version="0.3.0",
     description="AI core service for the DishHome ISP call center.",
 )
 
@@ -29,3 +40,7 @@ app.include_router(calls.router)
 app.include_router(voice.router)
 app.include_router(integrations.router)
 app.include_router(metrics.router)
+app.include_router(huawei.router)
+app.include_router(faqs.router)
+app.include_router(campaigns.router)
+app.include_router(inbox.router)
