@@ -7,6 +7,8 @@ import {
 } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import Layout from "./components/Layout";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { NetworkStatusBridge, ToastProvider } from "./components/Toast";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Calls from "./pages/Calls";
@@ -31,27 +33,32 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            element={
-              <RequireAuth>
-                <Layout />
-              </RequireAuth>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="calls" element={<Calls />} />
-            <Route path="calls/:id" element={<CallDetail />} />
-            <Route path="voice" element={<VoiceLab />} />
-            <Route path="integrations" element={<Integrations />} />
-            <Route path="settings" element={<Settings />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <NetworkStatusBridge />
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route
+                element={
+                  <RequireAuth>
+                    <Layout />
+                  </RequireAuth>
+                }
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="calls" element={<Calls />} />
+                <Route path="calls/:id" element={<CallDetail />} />
+                <Route path="voice" element={<VoiceLab />} />
+                <Route path="integrations" element={<Integrations />} />
+                <Route path="settings" element={<Settings />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }

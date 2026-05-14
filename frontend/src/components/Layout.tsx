@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { DishHomeLogo } from "./Logo";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: "▦" },
@@ -16,14 +17,11 @@ export default function Layout() {
   return (
     <div className="min-h-screen flex bg-dishhome-mist">
       <aside className="w-64 bg-dishhome-blue text-white flex flex-col">
-        <Link to="/" className="px-6 py-5 flex items-center gap-3 border-b border-white/10">
-          <span className="inline-block w-3 h-3 rounded-full bg-dishhome-orange" />
-          <div className="leading-tight">
-            <div className="font-semibold">DishHome AI</div>
-            <div className="text-[11px] uppercase tracking-widest text-white/60">
-              Call Center
-            </div>
-          </div>
+        <Link
+          to="/"
+          className="px-5 py-5 flex items-center border-b border-white/10"
+        >
+          <DishHomeLogo />
         </Link>
 
         <nav className="flex-1 py-4">

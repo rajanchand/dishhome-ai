@@ -48,3 +48,6 @@ recordings/
 *.wav
 *.mp3
 *.opus
+
+# Runtime artifacts (backend creates this dir on startup)
+backend/voice_uploads/

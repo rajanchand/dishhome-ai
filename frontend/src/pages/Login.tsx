@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { ApiError } from "../lib/api";
 import { Button, Input } from "../components/ui";
+import { DishHomeLogo } from "../components/Logo";
 
 export default function Login() {
   const { login } = useAuth();
@@ -12,17 +13,24 @@ export default function Login() {
   const [password, setPassword] = useState("dishhome123");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reqId, setReqId] = useState<string | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setReqId(null);
     try {
       await login(username, password);
       const from = (loc.state as { from?: string } | null)?.from ?? "/";
       nav(from, { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed");
+      if (err instanceof ApiError) {
+        setError(err.message);
+        setReqId(err.requestId ?? null);
+      } else {
+        setError("Login failed");
+      }
     } finally {
       setBusy(false);
     }
@@ -31,10 +39,7 @@ export default function Login() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-dishhome-mist">
       <div className="hidden lg:flex flex-col justify-between bg-dishhome-blue text-white p-12">
-        <div className="flex items-center gap-3">
-          <span className="inline-block w-3 h-3 rounded-full bg-dishhome-orange" />
-          <div className="font-semibold text-lg">DishHome AI Call Center</div>
-        </div>
+        <DishHomeLogo />
         <div>
           <h1 className="text-4xl font-bold leading-tight">
             One platform.<br />
@@ -61,6 +66,9 @@ export default function Login() {
           onSubmit={onSubmit}
           className="w-full max-w-sm rounded-2xl bg-white border border-black/5 shadow-sm p-8"
         >
+          <div className="lg:hidden mb-6">
+            <DishHomeLogo variant="light" />
+          </div>
           <h2 className="text-xl font-semibold text-dishhome-blue">
             Sign in to portal
           </h2>
@@ -86,8 +94,13 @@ export default function Login() {
           </div>
 
           {error && (
-            <div className="mt-4 text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-3 py-2">
-              {error}
+            <div className="mt-4 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2">
+              <div className="font-medium">{error}</div>
+              {reqId && (
+                <div className="text-xs opacity-70 mt-0.5 font-mono">
+                  Request ID: {reqId}
+                </div>
+              )}
             </div>
           )}
 

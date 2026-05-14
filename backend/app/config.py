@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
-    cors_allowed_origins: str = "http://localhost:5173"
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:70b"
