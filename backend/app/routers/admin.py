@@ -378,6 +378,46 @@ def revoke_one_session(
     return {"status": "revoked", "token_prefix": token_prefix}
 
 
+# ---- Database / Supabase health ----
+
+@router.get("/db/health")
+async def db_health(
+    _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+) -> dict:
+    """Confirm Supabase credentials work and the expected tables exist."""
+    from app.config import settings as _settings
+    from app.supabase_client import (
+        SupabaseError,
+        health as sb_health,
+        required_tables_present,
+    )
+
+    if not _settings.supabase_enabled:
+        return {
+            "enabled": False,
+            "url": _settings.supabase_url or None,
+            "hint": "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env",
+        }
+    expected = ("users", "sessions", "login_events", "audit_log")
+    try:
+        h = await sb_health()
+        tables = await required_tables_present(expected)
+    except SupabaseError as e:
+        return {"enabled": True, "reachable": False, "error": str(e)}
+    return {
+        "enabled": True,
+        "reachable": h["ok"],
+        "url": h["url"],
+        "schema": h["schema"],
+        "tables": tables,
+        "migration_applied": all(tables.values()),
+        "hint": (
+            None if all(tables.values())
+            else "Open Supabase → SQL Editor and run backend/migrations/0001_initial.sql"
+        ),
+    }
+
+
 @router.post("/users/_seed-token")
 def issue_token_for_user(
     username: str,

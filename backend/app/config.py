@@ -51,6 +51,19 @@ class Settings(BaseSettings):
     # X-Twilio-Signature header.
     twilio_validate_signatures: bool = True
 
+    # --- Supabase (Postgres-backed persistence via PostgREST) ---
+    # When unset, the app uses its in-memory state (current behaviour).
+    # When set, USERS / login events / audit log / sessions write through to
+    # Supabase so they survive restarts and scale across instances.
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    supabase_schema: str = "public"
+
+    @property
+    def supabase_enabled(self) -> bool:
+        return bool(self.supabase_url and self.supabase_service_role_key)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
