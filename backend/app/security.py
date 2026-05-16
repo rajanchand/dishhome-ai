@@ -64,6 +64,8 @@ def is_hashed(value: str) -> bool:
 # Session management (UserSession) is now handled via SQLAlchemy in routers/auth.py
 # and managed via routers/admin.py. In-memory sessions have been removed.
 
+SESSION_TTL_SECONDS = 86400  # 24 hours
+
 # ----- Login rate limiter -----
 
 LOGIN_FAIL_WINDOW_SECONDS = 15 * 60  # 15 minutes
