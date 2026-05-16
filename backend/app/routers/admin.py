@@ -4,26 +4,26 @@ All endpoints require the `users.manage` permission. Mutations are logged
 to the audit ring (visible at /admin/audit-log).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.mock_data import USERS
+from app.database import get_db_session
+from app.models.user import User, Session as UserSession
 from app.rbac import ROLE_ORDER, ROLE_PERMISSIONS, permissions_for
 from app.routers.auth import UserOut, require_permission
 from app.security import (
-    active_sessions,
     audit,
     audit_log,
     geo_for_ip,
     hash_password,
-    issue_session,
     login_events,
-    revoke_session_by_prefix,
-    revoke_user_sessions,
+    parse_user_agent,
 )
+from sqlalchemy import select, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -93,15 +93,15 @@ class AuditEntry(BaseModel):
     detail: str = ""
 
 
-def _to_admin_user(u: dict) -> AdminUser:
+def _to_admin_user(u: User) -> AdminUser:
     return AdminUser(
-        username=u["username"],
-        name=u["name"],
-        email=u["email"],
-        role=u["role"],
-        permissions=permissions_for(u["role"]),
-        created_at=u.get("created_at"),
-        created_by=u.get("created_by"),
+        username=u.username,
+        name=u.full_name,
+        email=u.email,
+        role=u.role,
+        permissions=permissions_for(u.role),
+        created_at=u.created_at.isoformat() if u.created_at else None,
+        created_by=None, # In production, link to creator
     )
 
 
@@ -113,120 +113,149 @@ def _can_target(actor: UserOut, target_role: str) -> None:
         raise HTTPException(403, "Only super_admin can manage super_admin users")
 
 
-def _last_super_admin_guard(username_being_changed: str) -> None:
-    others = [
-        u for u in USERS.values()
-        if u["role"] == "super_admin" and u["username"] != username_being_changed
-    ]
-    if not others:
-        raise HTTPException(409, "Cannot remove the last super_admin")
-
-
 @router.get("/users", response_model=list[AdminUser])
-def list_users(
+async def list_users(
     _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[AdminUser]:
-    return [_to_admin_user(u) for u in USERS.values()]
+    result = await db.execute(select(User))
+    users = result.scalars().all()
+    return [_to_admin_user(u) for u in users]
 
 
 @router.post("/users", response_model=AdminUser, status_code=201)
-def create_user(
+async def create_user(
     payload: CreateUserRequest,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AdminUser:
     _can_target(actor, payload.role)
-    uname = payload.username  # already lowercased by validator
-    if uname in USERS:
+    uname = payload.username
+    
+    result = await db.execute(select(User).where(User.username == uname))
+    if result.scalar_one_or_none():
         raise HTTPException(409, f"User {uname!r} already exists")
-    entry = {
-        "username": uname,
-        "password": hash_password(payload.password),
-        "name": payload.name.strip(),
-        "email": str(payload.email),
-        "role": payload.role,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "created_by": actor.username,
-    }
-    USERS[uname] = entry
+    
+    new_user = User(
+        username=uname,
+        email=str(payload.email),
+        full_name=payload.name.strip(),
+        password_hash=hash_password(payload.password),
+        role=payload.role
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    
     audit(actor=actor.username, action="user.create", target=uname, detail=f"role={payload.role}")
-    return _to_admin_user(entry)
+    return _to_admin_user(new_user)
 
 
 @router.patch("/users/{username}", response_model=AdminUser)
-def update_user(
+async def update_user(
     username: str,
     payload: UpdateUserRequest,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AdminUser:
     uname = username.strip().lower()
-    u = USERS.get(uname)
+    result = await db.execute(select(User).where(User.username == uname))
+    u = result.scalar_one_or_none()
     if not u:
         raise HTTPException(404, "User not found")
-    _can_target(actor, u["role"])
-    update = payload.model_dump(exclude_unset=True, exclude_none=True)
+    _can_target(actor, u.role)
+    
+    update_data = payload.model_dump(exclude_unset=True, exclude_none=True)
     changed: list[str] = []
-    if "role" in update and update["role"] != u["role"]:
-        new_role = update["role"]
+    
+    if "role" in update_data and update_data["role"] != u.role:
+        new_role = update_data["role"]
         _can_target(actor, new_role)
-        if u["role"] == "super_admin" and new_role != "super_admin":
-            _last_super_admin_guard(u["username"])
-        u["role"] = new_role
-        revoke_user_sessions(u["username"])
+        # Last super admin check
+        if u.role == "super_admin" and new_role != "super_admin":
+            res = await db.execute(select(User).where(User.role == "super_admin", User.username != u.username))
+            if not res.scalars().first():
+                raise HTTPException(409, "Cannot remove the last super_admin")
+        u.role = new_role
+        # Revoke sessions
+        await db.execute(delete(UserSession).where(UserSession.username == u.username))
         changed.append(f"role={new_role}")
-    if "name" in update:
-        u["name"] = update["name"].strip()
+        
+    if "name" in update_data:
+        u.full_name = update_data["name"].strip()
         changed.append("name")
-    if "email" in update:
-        u["email"] = str(update["email"])
+    if "email" in update_data:
+        u.email = str(update_data["email"])
         changed.append("email")
+        
     if changed:
-        audit(actor=actor.username, action="user.update", target=u["username"], detail=",".join(changed))
+        await db.commit()
+        await db.refresh(u)
+        audit(actor=actor.username, action="user.update", target=u.username, detail=",".join(changed))
+    
     return _to_admin_user(u)
 
 
 @router.delete("/users/{username}", status_code=204)
-def delete_user(
+async def delete_user(
     username: str,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> None:
     uname = username.strip().lower()
-    u = USERS.get(uname)
+    result = await db.execute(select(User).where(User.username == uname))
+    u = result.scalar_one_or_none()
     if not u:
         raise HTTPException(404, "User not found")
     if uname == actor.username:
         raise HTTPException(409, "You cannot delete yourself")
-    _can_target(actor, u["role"])
-    if u["role"] == "super_admin":
-        _last_super_admin_guard(uname)
-    USERS.pop(uname, None)
-    revoke_user_sessions(uname)
+    _can_target(actor, u.role)
+    
+    if u.role == "super_admin":
+        res = await db.execute(select(User).where(User.role == "super_admin", User.username != u.username))
+        if not res.scalars().first():
+            raise HTTPException(409, "Cannot delete the last super_admin")
+            
+    await db.delete(u)
+    await db.execute(delete(UserSession).where(UserSession.username == uname))
+    await db.commit()
     audit(actor=actor.username, action="user.delete", target=uname)
 
 
 @router.post("/users/{username}/reset-password")
-def reset_password(
+async def reset_password(
     username: str,
     payload: ResetPasswordRequest,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, int | str]:
     uname = username.strip().lower()
-    u = USERS.get(uname)
+    result = await db.execute(select(User).where(User.username == uname))
+    u = result.scalar_one_or_none()
     if not u:
         raise HTTPException(404, "User not found")
-    _can_target(actor, u["role"])
-    u["password"] = hash_password(payload.new_password)
-    revoked = revoke_user_sessions(u["username"])
-    audit(actor=actor.username, action="user.reset_password", target=u["username"], detail=f"revoked={revoked}")
-    return {"status": "password_reset", "username": u["username"], "revoked_sessions": revoked}
+    _can_target(actor, u.role)
+    
+    u.password_hash = hash_password(payload.new_password)
+    # Revoke sessions
+    res = await db.execute(delete(UserSession).where(UserSession.username == u.username))
+    revoked = res.rowcount
+    await db.commit()
+    
+    audit(actor=actor.username, action="user.reset_password", target=u.username, detail=f"revoked={revoked}")
+    return {"status": "password_reset", "username": u.username, "revoked_sessions": revoked}
 
 
 @router.get("/roles", response_model=list[RoleOut])
-def list_roles(
+async def list_roles(
     _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[RoleOut]:
+    result = await db.execute(select(User.role))
+    roles = result.scalars().all()
     counts: dict[str, int] = {r: 0 for r in ROLE_ORDER}
-    for u in USERS.values():
-        counts[u["role"]] = counts.get(u["role"], 0) + 1
+    for r in roles:
+        counts[r] = counts.get(r, 0) + 1
     pretty = {
         "super_admin": "Super Admin",
         "admin": "Admin",
@@ -337,43 +366,47 @@ async def get_login_activity(
 @router.get("/active-sessions", response_model=list[ActiveSession])
 async def get_active_sessions(
     _: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ActiveSession]:
-    from app.security import parse_user_agent
-    rows = active_sessions()
+    result = await db.execute(select(UserSession).order_by(UserSession.last_seen_at.desc()))
+    sessions = result.scalars().all()
+    
     # Enrich distinct IPs.
-    distinct_ips = {r["last_ip"] or r["issued_ip"] for r in rows if r.get("last_ip") or r.get("issued_ip")}
+    distinct_ips = {s.ip_address for s in sessions if s.ip_address}
     geo_by_ip: dict[str, dict] = {}
     for ip in distinct_ips:
         geo_by_ip[ip] = await geo_for_ip(ip)
 
     out: list[ActiveSession] = []
-    for r in rows:
-        ip = r["last_ip"] or r["issued_ip"]
+    for s in sessions:
         out.append(
             ActiveSession(
-                token_prefix=r["token_prefix"],
-                username=r["username"],
-                issued_at=r["issued_at"],
-                expires_at=r["expires_at"],
-                last_seen=r["last_seen"],
-                issued_ip=r["issued_ip"],
-                last_ip=r["last_ip"],
-                user_agent=r["user_agent"],
-                device=parse_user_agent(r["user_agent"]),
-                geo=GeoInfo(**geo_by_ip[ip]) if ip in geo_by_ip else None,
+                token_prefix=s.id[:8],
+                username=s.username,
+                issued_at=s.created_at.timestamp(),
+                expires_at=s.expires_at.timestamp(),
+                last_seen=s.last_seen_at.timestamp(),
+                issued_ip=s.ip_address or "0.0.0.0",
+                last_ip=s.ip_address or "0.0.0.0",
+                user_agent=s.user_agent or "Unknown",
+                device=parse_user_agent(s.user_agent),
+                geo=GeoInfo(**geo_by_ip[s.ip_address]) if s.ip_address in geo_by_ip else None,
             )
         )
     return out
 
 
 @router.post("/active-sessions/{token_prefix}/revoke")
-def revoke_one_session(
+async def revoke_one_session(
     token_prefix: str,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str | bool]:
-    ok = revoke_session_by_prefix(token_prefix.strip())
-    if not ok:
+    # In production we'd use a better way than startswith if possible
+    result = await db.execute(delete(UserSession).where(UserSession.id.startswith(token_prefix)))
+    if result.rowcount == 0:
         raise HTTPException(404, "No session matched that prefix")
+    await db.commit()
     audit(actor=actor.username, action="session.revoke", target=token_prefix, detail="manual")
     return {"status": "revoked", "token_prefix": token_prefix}
 
@@ -419,15 +452,33 @@ async def db_health(
 
 
 @router.post("/users/_seed-token")
-def issue_token_for_user(
+async def issue_token_for_user(
     username: str,
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str]:
     """Diagnostic: mint a session token for another user (super_admin only)."""
     if actor.role != "super_admin":
         raise HTTPException(403, "Only super_admin may impersonate")
-    u = USERS.get(username.strip().lower())
+    
+    uname = username.strip().lower()
+    result = await db.execute(select(User).where(User.username == uname))
+    u = result.scalar_one_or_none()
     if not u:
         raise HTTPException(404, "User not found")
-    audit(actor=actor.username, action="user.impersonate", target=u["username"])
-    return {"token": issue_session(u["username"]), "username": u["username"]}
+        
+    import secrets
+    from app.security import SESSION_TTL_SECONDS
+    token = secrets.token_urlsafe(32)
+    new_sess = UserSession(
+        id=token,
+        username=u.username,
+        expires_at=datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS),
+        ip_address="0.0.0.0",
+        user_agent="impersonation"
+    )
+    db.add(new_sess)
+    await db.commit()
+    
+    audit(actor=actor.username, action="user.impersonate", target=u.username)
+    return {"token": token, "username": u.username}

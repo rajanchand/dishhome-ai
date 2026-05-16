@@ -82,11 +82,34 @@ export default function CallDetailPage() {
 
           <div className="space-y-4">
             <Card title="Summary">
+              <div className="mb-4">
+                <div className="flex items-center justify-between text-xs uppercase tracking-widest text-dishhome-ink/50 mb-1.5">
+                  <span>Sentiment</span>
+                  <span className="font-semibold text-dishhome-ink">
+                    {call.sentiment_score > 0 ? "Positive" : call.sentiment_score < 0 ? "Negative" : "Neutral"}
+                  </span>
+                </div>
+                <div className="h-2 w-full bg-black/5 rounded-full overflow-hidden flex">
+                  <div 
+                    className="h-full bg-emerald-500 transition-all duration-500" 
+                    style={{ width: `${Math.max(0, call.sentiment_score * 100)}%` }} 
+                  />
+                  <div 
+                    className="h-full bg-rose-500 transition-all duration-500" 
+                    style={{ width: `${Math.max(0, -call.sentiment_score * 100)}%` }} 
+                  />
+                </div>
+              </div>
               <dl className="text-sm space-y-3">
                 <Row label="Status">
-                  <Badge tone={statusTone(call.status)}>
-                    {call.status.replace("_", " ")}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge tone={statusTone(call.status)}>
+                      {call.status.replace("_", " ")}
+                    </Badge>
+                    {call.status === "in_progress" && (
+                      <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" title="Live" />
+                    )}
+                  </div>
                 </Row>
                 <Row label="Intent">{call.intent.replace("_", " ")}</Row>
                 <Row label="Resolution">

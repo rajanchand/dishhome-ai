@@ -39,19 +39,22 @@ async def synthesize(
 ) -> bytes:
     """Return raw MP3 bytes. Raises ElevenLabsError on non-2xx."""
     async with _client() as c:
-        resp = await c.post(
-            f"/text-to-speech/{voice_id}",
-            params={"output_format": output_format},
-            json={
-                "text": text,
-                "model_id": model_id or settings.elevenlabs_model_id,
-            },
-        )
-        if resp.status_code >= 300:
-            raise ElevenLabsError(
-                f"ElevenLabs TTS failed [{resp.status_code}]: {resp.text[:300]}"
+        try:
+            resp = await c.post(
+                f"/text-to-speech/{voice_id}",
+                params={"output_format": output_format},
+                json={
+                    "text": text,
+                    "model_id": model_id or settings.elevenlabs_model_id,
+                },
             )
-        return resp.content
+            if resp.status_code >= 300:
+                raise ElevenLabsError(
+                    f"ElevenLabs TTS failed [{resp.status_code}]: {resp.text[:300]}"
+                )
+            return resp.content
+        except httpx.RequestError as e:
+            raise ElevenLabsError(f"Network error communicating with ElevenLabs: {e}") from e
 
 
 async def clone_voice(
@@ -66,31 +69,40 @@ async def clone_voice(
     async with _client() as c:
         files = {"files": (sample_filename, sample_bytes, sample_mime)}
         data = {"name": name, "description": description}
-        resp = await c.post("/voices/add", data=data, files=files)
-        if resp.status_code >= 300:
-            raise ElevenLabsError(
-                f"ElevenLabs voice clone failed [{resp.status_code}]: {resp.text[:400]}"
-            )
-        body = resp.json()
-        if "voice_id" not in body:
-            raise ElevenLabsError(f"ElevenLabs response missing voice_id: {body}")
-        return body["voice_id"]
+        try:
+            resp = await c.post("/voices/add", data=data, files=files)
+            if resp.status_code >= 300:
+                raise ElevenLabsError(
+                    f"ElevenLabs voice clone failed [{resp.status_code}]: {resp.text[:400]}"
+                )
+            body = resp.json()
+            if "voice_id" not in body:
+                raise ElevenLabsError(f"ElevenLabs response missing voice_id: {body}")
+            return body["voice_id"]
+        except httpx.RequestError as e:
+            raise ElevenLabsError(f"Network error communicating with ElevenLabs: {e}") from e
 
 
 async def delete_remote_voice(voice_id: str) -> None:
     async with _client() as c:
-        resp = await c.delete(f"/voices/{voice_id}")
-        if resp.status_code >= 300 and resp.status_code != 404:
-            raise ElevenLabsError(
-                f"ElevenLabs delete failed [{resp.status_code}]: {resp.text[:200]}"
-            )
+        try:
+            resp = await c.delete(f"/voices/{voice_id}")
+            if resp.status_code >= 300 and resp.status_code != 404:
+                raise ElevenLabsError(
+                    f"ElevenLabs delete failed [{resp.status_code}]: {resp.text[:200]}"
+                )
+        except httpx.RequestError as e:
+            raise ElevenLabsError(f"Network error communicating with ElevenLabs: {e}") from e
 
 
 async def list_remote_voices() -> list[dict]:
     async with _client() as c:
-        resp = await c.get("/voices")
-        if resp.status_code >= 300:
-            raise ElevenLabsError(
-                f"ElevenLabs list failed [{resp.status_code}]: {resp.text[:200]}"
-            )
-        return resp.json().get("voices", [])
+        try:
+            resp = await c.get("/voices")
+            if resp.status_code >= 300:
+                raise ElevenLabsError(
+                    f"ElevenLabs list failed [{resp.status_code}]: {resp.text[:200]}"
+                )
+            return resp.json().get("voices", [])
+        except httpx.RequestError as e:
+            raise ElevenLabsError(f"Network error communicating with ElevenLabs: {e}") from e

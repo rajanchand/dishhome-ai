@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+xleaimport { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   api,
@@ -50,8 +50,8 @@ export default function Dashboard() {
 
   const recent = calls
     ? [...calls]
-        .sort((a, b) => b.started_at.localeCompare(a.started_at))
-        .slice(0, 6)
+      .sort((a, b) => b.started_at.localeCompare(a.started_at))
+      .slice(0, 6)
     : [];
 
   return (
@@ -142,39 +142,45 @@ export default function Dashboard() {
             )}
           </Card>
 
-          <Card title="System health">
-            <ul className="space-y-3 text-sm">
-              <Health
-                label="FreeSWITCH SIP trunk"
-                tone="success"
-                detail="connected"
-              />
-              <Health
-                label="Ollama LLM"
-                tone="success"
-                detail="llama3.1:70b · 712ms p50"
-              />
-              <Health
-                label="faster-whisper STT"
-                tone="success"
-                detail="large-v3 · 280ms p50"
-              />
-              <Health
-                label="Piper TTS"
-                tone="success"
-                detail="anjali-ne · 110ms p50"
-              />
-              <Health
-                label="DishHome Billing API"
-                tone="info"
-                detail="mock · 67ms"
-              />
-              <Health
-                label="Network OSS"
-                tone="warn"
-                detail="degraded · Pokhara"
-              />
-            </ul>
+          <Card title="Live Intelligence Feed">
+            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin">
+              <div className="flex items-start gap-3 p-3 bg-dishhome-blue/5 rounded-xl border border-dishhome-blue/10 animate-in fade-in slide-in-from-right-4">
+                <div className="w-2 h-2 mt-1.5 rounded-full bg-dishhome-blue animate-pulse shrink-0" />
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 mb-1">9841****** · Now</div>
+                  <p className="text-xs text-dishhome-ink italic">"नमस्ते, मेरो राउटरमा रातो बत्ती बलिरहेको छ..."</p>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <Badge tone="info">RED_LIGHT_ISSUE</Badge>
+                    <span className="text-[10px] text-emerald-600 font-medium">92% Match</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 p-3 bg-black/5 rounded-xl border border-black/5 opacity-80">
+                <div className="w-2 h-2 mt-1.5 rounded-full bg-dishhome-ink/20 shrink-0" />
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 mb-1">9802****** · 2m ago</div>
+                  <p className="text-xs text-dishhome-ink">"When is the technician coming to check my ONT?"</p>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <Badge tone="warn">FIELD_DISPATCH</Badge>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 p-3 bg-black/5 rounded-xl border border-black/5 opacity-60">
+                <div className="w-2 h-2 mt-1.5 rounded-full bg-dishhome-ink/20 shrink-0" />
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 mb-1">9818****** · 5m ago</div>
+                  <p className="text-xs text-dishhome-ink">"I want to renew my annual subscription package."</p>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <Badge tone="success">RENEWAL_QUERY</Badge>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button className="w-full mt-4 text-[10px] uppercase tracking-widest text-dishhome-blue font-bold hover:underline">
+              View All Transcripts →
+            </button>
           </Card>
         </div>
 
@@ -238,32 +244,6 @@ export default function Dashboard() {
         </div>
       </PageBody>
     </>
-  );
-}
-
-function Health({
-  label,
-  tone,
-  detail,
-}: {
-  label: string;
-  tone: "success" | "warn" | "danger" | "info";
-  detail: string;
-}) {
-  const dot = {
-    success: "bg-emerald-500",
-    warn: "bg-amber-500",
-    danger: "bg-rose-500",
-    info: "bg-sky-500",
-  }[tone];
-  return (
-    <li className="flex items-center justify-between">
-      <span className="flex items-center gap-2">
-        <span className={`w-2 h-2 rounded-full ${dot}`} />
-        {label}
-      </span>
-      <span className="text-xs text-dishhome-ink/60">{detail}</span>
-    </li>
   );
 }
 

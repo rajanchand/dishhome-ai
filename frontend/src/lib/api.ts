@@ -359,6 +359,7 @@ export interface CallSummary {
   status: string;
   intent: string;
   ai_confidence: number;
+  sentiment_score: number;
 }
 
 export interface TranscriptTurn {

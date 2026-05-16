@@ -4,21 +4,22 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-dishhome_ai}
       POSTGRES_USER: ${POSTGRES_USER:-dishhome}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dishhome}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dishhome_secret}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dishhome}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dishhome} -d ${POSTGRES_DB:-dishhome_ai}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -26,12 +27,42 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles: ["ai", "gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  freeswitch_mock:
+    image: alpine/socat
+    command: TCP-LISTEN:${FREESWITCH_AUDIOSOCKET_PORT:-4000},fork,reuseaddr EXEC:"/bin/cat"
+    ports:
+      - "${FREESWITCH_AUDIOSOCKET_PORT:-4000}:${FREESWITCH_AUDIOSOCKET_PORT:-4000}"
+    restart: unless-stopped
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ${BACKEND_BUILD_TARGET:-development}
     env_file: .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_HOST=redis
+      - OLLAMA_HOST=http://ollama:11434
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,17 +70,26 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+    restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${FRONTEND_BUILD_TARGET:-development}
     ports:
-      - "3000:3000"
+      - "5173:5173"
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://localhost:${APP_PORT:-8000}
     depends_on:
       - backend
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
+  ollama_data:

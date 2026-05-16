@@ -4,24 +4,25 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
+from sqlalchemy import select, func, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.mock_data import CALLS
+from app.database import get_db_session
+from app.models.call import Call
+from app.models.user import Session as UserSession
 from app.routers.auth import UserOut, current_user
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
-
 class CallSessionCreate(BaseModel):
     caller_number: str
     called_number: str
-
 
 class CallSession(BaseModel):
     session_id: str
     caller_number: str
     called_number: str
     status: str
-
 
 class CallSummary(BaseModel):
     id: str
@@ -36,54 +37,53 @@ class CallSummary(BaseModel):
     status: str
     intent: str
     ai_confidence: float
-
+    sentiment_score: float | None = 0.0
 
 class TranscriptTurn(BaseModel):
     role: str
     text: str
 
-
 class CallDetail(CallSummary):
     resolution: str | None
     transcript: list[TranscriptTurn]
 
-
 @router.get("", response_model=list[CallSummary])
-async def list_calls(_: Annotated[UserOut, Depends(current_user)]) -> list[CallSummary]:
-    from app.database import get_pool
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM dh.calls ORDER BY started_at DESC LIMIT 50")
+async def list_calls(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[UserOut, Depends(current_user)]
+) -> list[CallSummary]:
+    result = await db.execute(select(Call).order_by(Call.start_time.desc()).limit(50))
+    calls = result.scalars().all()
     
     return [
         CallSummary(
-            id=r["id"],
-            caller_number=r["caller_number"],
-            called_number=r["called_number"],
-            customer_id=r["customer_id"],
-            customer_name=r["customer_name"],
-            language=r["language"],
-            started_at=r["started_at"].isoformat() if r["started_at"] else "",
-            ended_at=r["ended_at"].isoformat() if r["ended_at"] else "",
-            duration_sec=r["duration_sec"] or 0,
-            status=r["status"],
-            intent=r["intent"] or "",
-            ai_confidence=float(r["ai_confidence"]) if r["ai_confidence"] is not None else 0.0,
+            id=c.id,
+            caller_number=c.phone_number,
+            called_number="DishHome AI",
+            customer_id=c.customer_id,
+            customer_name=c.customer_name,
+            language=c.language,
+            started_at=c.start_time.isoformat() if c.start_time else "",
+            ended_at=c.end_time.isoformat() if c.end_time else None,
+            duration_sec=c.duration_seconds or 0,
+            status=c.status,
+            intent="unknown",
+            ai_confidence=0.0,
+            sentiment_score=c.sentiment_score or 0.0,
         )
-        for r in rows
+        for c in calls
     ]
 
-
 @router.get("/stats")
-async def stats(_: Annotated[UserOut, Depends(current_user)]) -> dict[str, int | float]:
-    from app.database import get_pool
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        total = await conn.fetchval("SELECT count(*) FROM dh.calls") or 0
-        in_progress = await conn.fetchval("SELECT count(*) FROM dh.calls WHERE status = 'in_progress'") or 0
-        resolved = await conn.fetchval("SELECT count(*) FROM dh.calls WHERE status = 'resolved'") or 0
-        ticketed = await conn.fetchval("SELECT count(*) FROM dh.calls WHERE status = 'ticket_created'") or 0
-        sum_duration = await conn.fetchval("SELECT sum(duration_sec) FROM dh.calls") or 0
+async def stats(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[UserOut, Depends(current_user)]
+) -> dict[str, int | float]:
+    total = (await db.execute(select(func.count(Call.id)))).scalar_one() or 0
+    in_progress = (await db.execute(select(func.count(Call.id)).where(Call.status == 'in_progress'))).scalar_one() or 0
+    resolved = (await db.execute(select(func.count(Call.id)).where(Call.status == 'completed'))).scalar_one() or 0
+    ticketed = (await db.execute(select(func.count(Call.id)).where(Call.status == 'failed'))).scalar_one() or 0
+    sum_duration = (await db.execute(select(func.sum(Call.duration_seconds)))).scalar_one() or 0
 
     avg_handle = round(sum_duration / total, 1) if total else 0
     return {
@@ -95,61 +95,53 @@ async def stats(_: Annotated[UserOut, Depends(current_user)]) -> dict[str, int |
         "ai_resolution_rate": round(resolved / total, 2) if total else 0.0,
     }
 
-
 @router.get("/{call_id}", response_model=CallDetail)
 async def call_detail(
     call_id: str,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
     _: Annotated[UserOut, Depends(current_user)],
 ) -> CallDetail:
-    from app.database import get_pool
-    import json
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        r = await conn.fetchrow("SELECT * FROM dh.calls WHERE id = $1", call_id)
+    result = await db.execute(select(Call).where(Call.id == call_id))
+    c = result.scalar_one_or_none()
         
-    if not r:
+    if not c:
         raise HTTPException(404, "Call not found")
         
-    transcript = json.loads(r["transcript"]) if isinstance(r["transcript"], str) else r["transcript"]
-    
     return CallDetail(
-        id=r["id"],
-        caller_number=r["caller_number"],
-        called_number=r["called_number"],
-        customer_id=r["customer_id"],
-        customer_name=r["customer_name"],
-        language=r["language"],
-        started_at=r["started_at"].isoformat() if r["started_at"] else "",
-        ended_at=r["ended_at"].isoformat() if r["ended_at"] else "",
-        duration_sec=r["duration_sec"] or 0,
-        status=r["status"],
-        resolution=r["resolution"],
-        intent=r["intent"] or "",
-        ai_confidence=float(r["ai_confidence"]) if r["ai_confidence"] is not None else 0.0,
-        transcript=[TranscriptTurn(**t) for t in (transcript or [])],
+        id=c.id,
+        caller_number=c.phone_number,
+        called_number="DishHome AI",
+        customer_id=c.customer_id,
+        customer_name=c.customer_name,
+        language=c.language,
+        started_at=c.start_time.isoformat() if c.start_time else "",
+        ended_at=c.end_time.isoformat() if c.end_time else None,
+        duration_sec=c.duration_seconds or 0,
+        status=c.status,
+        resolution=None,
+        intent="unknown",
+        ai_confidence=0.0,
+        sentiment_score=c.sentiment_score or 0.0,
+        transcript=[TranscriptTurn(**t) for t in (c.transcript or [])],
     )
-
 
 @router.post("/session", response_model=CallSession)
 async def create_session(
     payload: CallSessionCreate,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
     _: Annotated[UserOut, Depends(current_user)],
 ) -> CallSession:
     session_id = str(uuid4())
     
-    from app.database import get_pool
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO dh.calls (
-                id, caller_number, called_number, language, started_at, 
-                duration_sec, status, intent, ai_confidence, transcript
-            )
-            VALUES ($1, $2, $3, 'ne', NOW(), 0, 'in_progress', 'unknown', 0.0, '[]'::jsonb)
-            """,
-            session_id, payload.caller_number, payload.called_number
-        )
+    new_call = Call(
+        id=session_id,
+        phone_number=payload.caller_number,
+        language="ne",
+        status="in_progress",
+        transcript=[]
+    )
+    db.add(new_call)
+    await db.commit()
 
     return CallSession(
         session_id=session_id,
@@ -158,7 +150,6 @@ async def create_session(
         status="created",
     )
 
-
 @router.websocket("/audio/{session_id}")
 async def audio_bridge(websocket: WebSocket, session_id: str) -> None:
     # Authenticate via query param: ws://host/calls/audio/123?token=abc
@@ -166,17 +157,26 @@ async def audio_bridge(websocket: WebSocket, session_id: str) -> None:
     if not token:
         await websocket.close(code=4001, reason="Missing auth token")
         return
-    from app.security import resolve_session
-    username = resolve_session(token)
-    if not username:
-        await websocket.close(code=4001, reason="Invalid or expired token")
-        return
-    del session_id  # will be used to route audio in real impl
+    
+    from app.database import get_db_session
+    # Note: Websockets can't use Depends() easily for sessions in a loop,
+    # but we can resolve the token once at start.
+    from sqlalchemy import select
+    from app.database import engine
+    from sqlalchemy.ext.asyncio import AsyncSession
+    
+    async with AsyncSession(engine) as db:
+        result = await db.execute(select(UserSession).where(UserSession.id == token))
+        sess = result.scalar_one_or_none()
+        if not sess or sess.expires_at < datetime.now():
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+
     await websocket.accept()
     try:
         while True:
-            # STUB: real impl will pump PCM frames -> STT -> LLM -> TTS -> PCM frames back.
             chunk = await websocket.receive_bytes()
+            # STUB: echo back
             await websocket.send_bytes(chunk)
     except WebSocketDisconnect:
         return

@@ -73,26 +73,32 @@ async def select(
         params["limit"] = limit
     if offset is not None:
         params["offset"] = offset
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.get(f"{_base()}/{table}", params=params, headers=_headers())
-    if r.status_code >= 300:
-        raise SupabaseError(f"select {table} → {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get(f"{_base()}/{table}", params=params, headers=_headers())
+        if r.status_code >= 300:
+            raise SupabaseError(f"select {table} → {r.status_code}: {r.text[:300]}")
+        return r.json()
+    except httpx.RequestError as e:
+        raise SupabaseError(f"Network error communicating with Supabase: {e}") from e
 
 
 async def insert(table: str, row: dict | list[dict]) -> list[dict]:
     """Insert one or many rows. Returns the inserted rows (Prefer: return=representation)."""
     _require()
     body = row if isinstance(row, list) else [row]
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.post(
-            f"{_base()}/{table}",
-            json=body,
-            headers=_headers(prefer="return=representation"),
-        )
-    if r.status_code >= 300:
-        raise SupabaseError(f"insert {table} → {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.post(
+                f"{_base()}/{table}",
+                json=body,
+                headers=_headers(prefer="return=representation"),
+            )
+        if r.status_code >= 300:
+            raise SupabaseError(f"insert {table} → {r.status_code}: {r.text[:300]}")
+        return r.json()
+    except httpx.RequestError as e:
+        raise SupabaseError(f"Network error communicating with Supabase: {e}") from e
 
 
 async def upsert(
@@ -103,16 +109,19 @@ async def upsert(
 ) -> list[dict]:
     _require()
     body = row if isinstance(row, list) else [row]
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.post(
-            f"{_base()}/{table}",
-            params={"on_conflict": on_conflict},
-            json=body,
-            headers=_headers(prefer="return=representation,resolution=merge-duplicates"),
-        )
-    if r.status_code >= 300:
-        raise SupabaseError(f"upsert {table} → {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.post(
+                f"{_base()}/{table}",
+                params={"on_conflict": on_conflict},
+                json=body,
+                headers=_headers(prefer="return=representation,resolution=merge-duplicates"),
+            )
+        if r.status_code >= 300:
+            raise SupabaseError(f"upsert {table} → {r.status_code}: {r.text[:300]}")
+        return r.json()
+    except httpx.RequestError as e:
+        raise SupabaseError(f"Network error communicating with Supabase: {e}") from e
 
 
 async def update(
@@ -124,71 +133,91 @@ async def update(
     _require()
     if not filters:
         raise SupabaseError("update requires filters — refusing unbounded UPDATE")
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.patch(
-            f"{_base()}/{table}",
-            params=filters,
-            json=patch,
-            headers=_headers(prefer="return=representation"),
-        )
-    if r.status_code >= 300:
-        raise SupabaseError(f"update {table} → {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.patch(
+                f"{_base()}/{table}",
+                params=filters,
+                json=patch,
+                headers=_headers(prefer="return=representation"),
+            )
+        if r.status_code >= 300:
+            raise SupabaseError(f"update {table} → {r.status_code}: {r.text[:300]}")
+        return r.json()
+    except httpx.RequestError as e:
+        raise SupabaseError(f"Network error communicating with Supabase: {e}") from e
 
 
 async def delete(table: str, *, filters: dict[str, str]) -> list[dict]:
     _require()
     if not filters:
         raise SupabaseError("delete requires filters — refusing unbounded DELETE")
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.delete(
-            f"{_base()}/{table}",
-            params=filters,
-            headers=_headers(prefer="return=representation"),
-        )
-    if r.status_code >= 300:
-        raise SupabaseError(f"delete {table} → {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.delete(
+                f"{_base()}/{table}",
+                params=filters,
+                headers=_headers(prefer="return=representation"),
+            )
+        if r.status_code >= 300:
+            raise SupabaseError(f"delete {table} → {r.status_code}: {r.text[:300]}")
+        return r.json()
+    except httpx.RequestError as e:
+        raise SupabaseError(f"Network error communicating with Supabase: {e}") from e
 
 
 async def rpc(name: str, params: dict | None = None) -> Any:
     _require()
-    async with httpx.AsyncClient(timeout=15.0) as c:
-        r = await c.post(
-            f"{_base()}/rpc/{name}",
-            json=params or {},
-            headers=_headers(),
-        )
-    if r.status_code >= 300:
-        raise SupabaseError(f"rpc {name} → {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.post(
+                f"{_base()}/rpc/{name}",
+                json=params or {},
+                headers=_headers(),
+            )
+        if r.status_code >= 300:
+            raise SupabaseError(f"rpc {name} → {r.status_code}: {r.text[:300]}")
+        return r.json()
+    except httpx.RequestError as e:
+        raise SupabaseError(f"Network error communicating with Supabase: {e}") from e
 
 
 async def health() -> dict:
     """Cheap reachability check. Hits the schema introspection endpoint."""
     _require()
-    async with httpx.AsyncClient(timeout=10.0) as c:
-        # GET /rest/v1/ returns the OpenAPI document of the exposed schema —
-        # confirms credentials work and the schema is reachable.
-        r = await c.get(_base() + "/", headers=_headers())
-    return {
-        "ok": r.status_code < 300,
-        "status_code": r.status_code,
-        "schema": settings.supabase_schema,
-        "url": settings.supabase_url,
-    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            # GET /rest/v1/ returns the OpenAPI document of the exposed schema —
+            # confirms credentials work and the schema is reachable.
+            r = await c.get(_base() + "/", headers=_headers())
+        return {
+            "ok": r.status_code < 300,
+            "status_code": r.status_code,
+            "schema": settings.supabase_schema,
+            "url": settings.supabase_url,
+        }
+    except httpx.RequestError:
+        return {
+            "ok": False,
+            "status_code": 0,
+            "schema": settings.supabase_schema,
+            "url": settings.supabase_url,
+        }
 
 
 async def table_exists(table: str) -> bool:
     """Returns True iff a SELECT … LIMIT 0 on the table succeeds."""
     _require()
-    async with httpx.AsyncClient(timeout=10.0) as c:
-        r = await c.get(
-            f"{_base()}/{table}",
-            params={"select": "*", "limit": 0},
-            headers=_headers(),
-        )
-    return r.status_code < 300
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(
+                f"{_base()}/{table}",
+                params={"select": "*", "limit": 0},
+                headers=_headers(),
+            )
+        return r.status_code < 300
+    except httpx.RequestError:
+        return False
 
 
 async def required_tables_present(tables: Iterable[str]) -> dict[str, bool]:
