@@ -1,6 +1,4 @@
-const BASE = (typeof window !== "undefined" && 
-  !window.location.hostname.includes("localhost") && 
-  !window.location.hostname.includes("127.0.0.1")) 
+const BASE = (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")) 
   ? "/api" 
   : "http://127.0.0.1:8000";
 
