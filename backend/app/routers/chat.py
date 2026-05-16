@@ -114,6 +114,72 @@ NEPALI_PATTERNS = [
 ]
 
 # ── Intent detection ──
+
+# Exact-match aliases for suggestion chip labels — checked FIRST
+# so clicking a chip always triggers the right intent.
+EXACT_INTENTS: dict[str, str] = {
+    # Packages
+    "view packages": "packages",
+    "packages": "packages",
+    "internet packages": "packages",
+    "show packages": "packages",
+    "show me packages": "packages",
+    "what packages": "packages",
+    "what are the internet packages": "packages",
+    "what are the packages": "packages",
+    "pricing": "packages",
+    "plans": "packages",
+    "upgrade package": "packages",
+    "how much": "packages",
+    # TV
+    "tv packages": "tv_packages",
+    "tv channels": "tv_packages",
+    "channels": "tv_packages",
+    # Billing
+    "check my bill": "billing",
+    "check bill": "billing",
+    "billing": "billing",
+    "my bill": "billing",
+    "pay bill": "billing",
+    "how to pay": "billing",
+    "how to pay?": "billing",
+    "payment": "billing",
+    "setup auto-pay": "billing",
+    "how to subscribe": "billing",
+    # Troubleshooting
+    "internet issue": "troubleshoot_internet",
+    "no internet": "troubleshoot_internet",
+    "internet not working": "troubleshoot_internet",
+    "reboot router": "troubleshoot_internet",
+    "troubleshoot": "troubleshoot_internet",
+    "run speed test": "troubleshoot_speed",
+    "slow internet": "troubleshoot_speed",
+    "change wi-fi password": "troubleshoot_wifi",
+    # Coverage
+    "check coverage": "coverage",
+    "check my area": "coverage",
+    "coverage": "coverage",
+    "new connection": "coverage",
+    "dishhome go (4g)": "coverage",
+    # Tickets
+    "create ticket": "ticket",
+    "create new ticket": "ticket",
+    "track ticket": "ticket",
+    "report issue": "ticket",
+    "schedule technician": "ticket",
+    # Contact
+    "contact support": "support_contact",
+    "contact info": "support_contact",
+    "call support": "support_contact",
+    # Thanks & bye
+    "thanks": "thanks",
+    "thank you": "thanks",
+    "goodbye": "goodbye",
+    "bye": "goodbye",
+    "another question": "greeting",
+    "try again": "greeting",
+}
+
 INTENTS = {
     "greeting": [
         r"\b(hi|hello|hey|namaste|namaskar|हेलो|नमस्ते|नमस्कार)\b",
@@ -122,6 +188,7 @@ INTENTS = {
     "packages": [
         r"\b(package|plan|price|pricing|offer|mbps|speed|internet plan|प्याकेज|मूल्य|दर)\b",
         r"\b(ftth|fiber|broadband|ब्रोडब्यान्ड|फाइबर)\b",
+        r"(show|view|list|what).*(package|plan|price)",
     ],
     "tv_packages": [
         r"\b(tv|television|channel|dish|dth|satellite|टिभी|च्यानल)\b",
@@ -133,24 +200,28 @@ INTENTS = {
     "troubleshoot_internet": [
         r"\b(no internet|not working|down|offline|disconnect|इन्टरनेट छैन|काम गरेन)\b",
         r"\b(outage|connection issue|can't connect|जोडिएन)\b",
+        r"\b(reboot|restart)\b.*\b(router|ont)\b",
     ],
     "troubleshoot_speed": [
-        r"\b(slow|speed|buffering|lag|latency|ढिलो|बिस्तारै)\b",
+        r"\b(slow|buffering|lag|latency|ढिलो|बिस्तारै)\b",
+        r"\bspeed\s*test\b",
     ],
     "troubleshoot_wifi": [
         r"\b(wifi|wi-fi|wireless|signal|वाइफाइ)\b",
     ],
     "coverage": [
-        r"\b(coverage|area|available|location|city|service area|क्षेत्र|उपलब्ध)\b",
+        r"\b(coverage|area|location|city|service area|क्षेत्र|उपलब्ध)\b",
+        r"\b(available|serve|where)\b.*\b(area|city|location)\b",
     ],
     "ticket": [
-        r"\b(ticket|complaint|issue|report|problem|complain|उजुरी|समस्या|टिकेट)\b",
+        r"\b(ticket|complaint|report|complain|उजुरी|टिकेट)\b",
+        r"\b(technician|tech visit)\b",
     ],
     "customer_lookup": [
         r"\b(my account|account status|customer id|DH\d+|SC-\d+|smartcard|मेरो खाता)\b",
     ],
     "support_contact": [
-        r"\b(contact|phone|call|email|helpline|support|सम्पर्क|फोन)\b",
+        r"\b(contact|helpline|support number|customer care|सम्पर्क)\b",
     ],
     "thanks": [
         r"\b(thanks|thank you|dhanyabad|धन्यवाद|appreciated)\b",
@@ -170,8 +241,18 @@ def _detect_language(text: str) -> str:
 
 
 def _detect_intent(text: str) -> str:
-    """Detect user intent from message text."""
-    text_lower = text.lower()
+    """Detect user intent from message text.
+    
+    First checks exact-match aliases (for suggestion chip labels),
+    then falls back to regex pattern matching.
+    """
+    text_lower = text.lower().strip()
+    
+    # 1. Exact match against known chip labels
+    if text_lower in EXACT_INTENTS:
+        return EXACT_INTENTS[text_lower]
+    
+    # 2. Regex pattern match
     for intent, patterns in INTENTS.items():
         for pat in patterns:
             if re.search(pat, text_lower, re.IGNORECASE):
