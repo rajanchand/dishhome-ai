@@ -21,6 +21,7 @@ from app.security import (
     SESSION_TTL_SECONDS,
     DUMMY_HASH
 )
+import time
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -69,7 +70,7 @@ async def current_user(
     result = await db.execute(
         select(UserSession, User)
         .join(User, UserSession.username == User.username)
-        .where(UserSession.id == token)
+        .where(UserSession.token == token)
     )
     row = result.first()
     
@@ -77,13 +78,14 @@ async def current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
     
     sess, user = row
-    if sess.expires_at < datetime.now():
+    now = time.time()
+    if sess.expires_at < now:
         await db.delete(sess)
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")
 
     # Update last seen
-    sess.last_seen_at = datetime.now()
+    sess.last_seen = now
     await db.commit()
     
     return _user_public(user)
@@ -125,12 +127,16 @@ async def login(
     
     # Generate persistent session
     token = secrets.token_urlsafe(32)
+    now = time.time()
     new_sess = UserSession(
-        id=token,
+        token=token,
         username=user.username,
-        expires_at=datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS),
-        ip_address=ip,
-        user_agent=user_agent[:255]
+        issued_at=now,
+        expires_at=now + SESSION_TTL_SECONDS,
+        last_seen=now,
+        issued_ip=ip,
+        user_agent=user_agent[:255],
+        last_ip=ip
     )
     db.add(new_sess)
     await db.commit()

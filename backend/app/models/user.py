@@ -18,10 +18,11 @@ class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = {"schema": "dh"}
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # token
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
     username: Mapped[str] = mapped_column(String(80), ForeignKey("dh.users.username"), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    ip_address: Mapped[str | None] = mapped_column(String(45))
-    user_agent: Mapped[str | None] = mapped_column(String(255))
+    issued_at: Mapped[float] = mapped_column(server_default="0")
+    expires_at: Mapped[float] = mapped_column(nullable=False)
+    last_seen: Mapped[float] = mapped_column(server_default="0")
+    issued_ip: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(1024))
+    last_ip: Mapped[str | None] = mapped_column(String(45))

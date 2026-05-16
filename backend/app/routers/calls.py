@@ -165,10 +165,11 @@ async def audio_bridge(websocket: WebSocket, session_id: str) -> None:
     from app.database import engine
     from sqlalchemy.ext.asyncio import AsyncSession
     
+    import time
     async with AsyncSession(engine) as db:
-        result = await db.execute(select(UserSession).where(UserSession.id == token))
+        result = await db.execute(select(UserSession).where(UserSession.token == token))
         sess = result.scalar_one_or_none()
-        if not sess or sess.expires_at < datetime.now():
+        if not sess or sess.expires_at < time.time():
             await websocket.close(code=4001, reason="Invalid or expired token")
             return
 

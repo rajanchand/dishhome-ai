@@ -22,6 +22,7 @@ from app.security import (
     login_events,
     parse_user_agent,
 )
+import time
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -368,11 +369,11 @@ async def get_active_sessions(
     _: Annotated[UserOut, Depends(require_permission("users.manage"))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ActiveSession]:
-    result = await db.execute(select(UserSession).order_by(UserSession.last_seen_at.desc()))
+    result = await db.execute(select(UserSession).order_by(UserSession.last_seen.desc()))
     sessions = result.scalars().all()
     
     # Enrich distinct IPs.
-    distinct_ips = {s.ip_address for s in sessions if s.ip_address}
+    distinct_ips = {s.issued_ip for s in sessions if s.issued_ip}
     geo_by_ip: dict[str, dict] = {}
     for ip in distinct_ips:
         geo_by_ip[ip] = await geo_for_ip(ip)
@@ -381,16 +382,16 @@ async def get_active_sessions(
     for s in sessions:
         out.append(
             ActiveSession(
-                token_prefix=s.id[:8],
+                token_prefix=s.token[:8],
                 username=s.username,
-                issued_at=s.created_at.timestamp(),
-                expires_at=s.expires_at.timestamp(),
-                last_seen=s.last_seen_at.timestamp(),
-                issued_ip=s.ip_address or "0.0.0.0",
-                last_ip=s.ip_address or "0.0.0.0",
+                issued_at=s.issued_at,
+                expires_at=s.expires_at,
+                last_seen=s.last_seen,
+                issued_ip=s.issued_ip or "0.0.0.0",
+                last_ip=s.last_ip or "0.0.0.0",
                 user_agent=s.user_agent or "Unknown",
                 device=parse_user_agent(s.user_agent),
-                geo=GeoInfo(**geo_by_ip[s.ip_address]) if s.ip_address in geo_by_ip else None,
+                geo=GeoInfo(**geo_by_ip[s.issued_ip]) if s.issued_ip in geo_by_ip else None,
             )
         )
     return out
@@ -403,7 +404,7 @@ async def revoke_one_session(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str | bool]:
     # In production we'd use a better way than startswith if possible
-    result = await db.execute(delete(UserSession).where(UserSession.id.startswith(token_prefix)))
+    result = await db.execute(delete(UserSession).where(UserSession.token.like(f"{token_prefix}%")))
     if result.rowcount == 0:
         raise HTTPException(404, "No session matched that prefix")
     await db.commit()
@@ -470,12 +471,16 @@ async def issue_token_for_user(
     import secrets
     from app.security import SESSION_TTL_SECONDS
     token = secrets.token_urlsafe(32)
+    now = time.time()
     new_sess = UserSession(
-        id=token,
+        token=token,
         username=u.username,
-        expires_at=datetime.now() + timedelta(seconds=SESSION_TTL_SECONDS),
-        ip_address="0.0.0.0",
-        user_agent="impersonation"
+        issued_at=now,
+        expires_at=now + SESSION_TTL_SECONDS,
+        last_seen=now,
+        issued_ip="0.0.0.0",
+        user_agent="impersonation",
+        last_ip="0.0.0.0"
     )
     db.add(new_sess)
     await db.commit()
