@@ -136,8 +136,25 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
             headers={"Retry-After": str(retry_after)},
         )
 
-    user = USERS.get(uname_raw)
-    stored = user.get("password") if user else None
+    user = None
+    stored = None
+    try:
+        from app.database import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT username, password_hash as password, name, email, role FROM dh.users WHERE username = $1",
+                uname_raw
+            )
+            if row:
+                user = dict(row)
+                stored = user.get("password")
+    except Exception as e:
+        import logging
+        logging.getLogger("dishhome.auth").error(f"DB Error: {e}")
+        # fallback to empty user if DB fails
+        pass
+
     # Always run argon2 verify (against a pre-computed dummy hash if user
     # missing) so the response time is constant whether the username exists or
     # not — prevents username enumeration via timing side-channel.

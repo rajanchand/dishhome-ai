@@ -69,35 +69,90 @@ class IntegrationTestResponse(BaseModel):
 
 
 @router.get("/dishhome/customer/{query}", response_model=Customer)
-def lookup_customer(
+async def lookup_customer(
     query: str,
     _: Annotated[UserOut, Depends(current_user)],
 ) -> Customer:
     """Lookup by customer_id, mobile, or smartcard."""
-    cust = find_customer(query)
-    if not cust:
+    q = (query or "").strip()
+    if not q:
+         raise HTTPException(404, "Customer not found")
+
+    from app.database import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT customer_id, name, mobile, smartcard, address, package, 
+                   balance_npr, due_date, status, ont_id
+            FROM dh.customers
+            WHERE customer_id = $1 OR mobile = $1 OR smartcard = $1
+            """,
+            q
+        )
+    if not row:
         raise HTTPException(404, "Customer not found")
-    return Customer(**cust)
+        
+    return Customer(
+        customer_id=row["customer_id"],
+        name=row["name"],
+        mobile=row["mobile"],
+        smartcard=row["smartcard"],
+        address=row["address"],
+        package=row["package"],
+        balance_npr=row["balance_npr"],
+        due_date=str(row["due_date"]) if row["due_date"] else "",
+        status=row["status"],
+        ont_id=row["ont_id"]
+    )
 
 
 @router.get("/dishhome/router-status/{ont_id}", response_model=RouterStatus)
-def router_status(
+async def router_status(
     ont_id: str,
     _: Annotated[UserOut, Depends(current_user)],
 ) -> RouterStatus:
-    status = ONT_STATUS.get(ont_id)
-    if not status:
+    from app.database import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT ont_id, online, rx_power_dbm, tx_power_dbm, uptime_hours, 
+                   last_reboot, pppoe_session, area_outage
+            FROM dh.ont_status
+            WHERE ont_id = $1
+            """,
+            ont_id
+        )
+    if not row:
         raise HTTPException(404, "ONT device not found")
-    return RouterStatus(**status)
+        
+    return RouterStatus(
+        ont_id=row["ont_id"],
+        online=row["online"],
+        rx_power_dbm=row["rx_power_dbm"],
+        tx_power_dbm=row["tx_power_dbm"],
+        uptime_hours=row["uptime_hours"],
+        last_reboot=row["last_reboot"].isoformat() if row["last_reboot"] else "",
+        pppoe_session=row["pppoe_session"] or "",
+        area_outage=row["area_outage"]
+    )
 
 
 @router.post("/dishhome/router-reboot/{ont_id}")
-def reboot_router(
+async def reboot_router(
     ont_id: str,
     _: Annotated[UserOut, Depends(current_user)],
 ) -> dict[str, str]:
-    if ont_id not in ONT_STATUS:
-        raise HTTPException(404, "ONT device not found")
+    from app.database import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT ont_id FROM dh.ont_status WHERE ont_id = $1", ont_id)
+        if not row:
+            raise HTTPException(404, "ONT device not found")
+            
+        await conn.execute("UPDATE dh.ont_status SET last_reboot = NOW(), uptime_hours = 0 WHERE ont_id = $1", ont_id)
+
     return {"ont_id": ont_id, "status": "reboot_sent", "expected_back_online_sec": "120"}
 
 

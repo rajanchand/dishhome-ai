@@ -19,10 +19,20 @@ from app.routers import (
     voice,
 )
 
+from contextlib import asynccontextmanager
+from app.database import connect_db, disconnect_db
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_db()
+    yield
+    await disconnect_db()
+
 app = FastAPI(
     title="DishHome AI Call Center",
     version="0.3.0",
     description="AI core service for the DishHome ISP call center.",
+    lifespan=lifespan,
 )
 
 # Observability first so request IDs propagate to CORS / errors.
