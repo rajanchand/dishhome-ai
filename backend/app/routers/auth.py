@@ -66,7 +66,7 @@ def _client_ip(request: Request | None) -> str:
     return request.client.host if request.client else "0.0.0.0"
 
 
-def current_user(
+async def current_user(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> UserOut:
@@ -74,14 +74,37 @@ def current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
     token = authorization.split(" ", 1)[1].strip()
     ip = _client_ip(request)
-    username = resolve_session(token, ip=ip)
-    if not username:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
-    user = USERS.get(username)
-    if not user:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User no longer exists")
+    
+    import time
+    from app.database import get_pool
+    pool = get_pool()
+    now = time.time()
+    
+    async with pool.acquire() as conn:
+        session = await conn.fetchrow(
+            "SELECT username, expires_at FROM dh.sessions WHERE token = $1", token
+        )
+        if not session or session["expires_at"] < now:
+            if session:
+                await conn.execute("DELETE FROM dh.sessions WHERE token = $1", token)
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
+            
+        # Sliding window renewal
+        from app.security import SESSION_IDLE_RENEWAL_SECONDS, SESSION_TTL_SECONDS
+        await conn.execute(
+            "UPDATE dh.sessions SET last_seen = $1, last_ip = $2 WHERE token = $3 AND last_seen < $4",
+            now, ip, token, now - SESSION_IDLE_RENEWAL_SECONDS
+        )
+        
+        user_row = await conn.fetchrow(
+            "SELECT username, name, email, role FROM dh.users WHERE username = $1",
+            session["username"]
+        )
+        if not user_row:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User no longer exists")
+            
     request.state.bearer_token = token
-    return _user_public(user)
+    return _user_public(dict(user_row))
 
 
 def require_permission(perm: str) -> Callable[[UserOut], UserOut]:
@@ -174,7 +197,22 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
         user["password"] = hash_password(payload.password)
 
     clear_login_failures(ip, uname_raw)
-    token = issue_session(user["username"], ip=ip, user_agent=user_agent)
+    
+    import secrets
+    import time
+    from app.security import SESSION_TTL_SECONDS
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    
+    # Store session in Postgres
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO dh.sessions (token, username, issued_at, expires_at, last_seen, issued_ip, user_agent, last_ip)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            token, user["username"], now, now + SESSION_TTL_SECONDS, now, ip, user_agent, ip
+        )
     audit(actor=user["username"], action="login", target=user["username"], detail=f"ip={ip}")
     record_login_event(
         username=user["username"], ip=ip, user_agent=user_agent,
@@ -198,7 +236,10 @@ async def logout(
 ) -> dict[str, str]:
     tok = getattr(request.state, "bearer_token", None)
     if tok:
-        revoke_session(tok)
+        from app.database import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM dh.sessions WHERE token = $1", tok)
     audit(actor=user.username, action="logout", target=user.username)
     await persist_audit(_last_audit())
     return {"status": "logged_out", "username": user.username}
