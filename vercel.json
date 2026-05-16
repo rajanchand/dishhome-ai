@@ -12,8 +12,10 @@
       "config": { "distDir": "dist" }
     }
   ],
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.py" },
-    { "source": "/((?!assets/|.*\\..*).*)", "destination": "/index.html" }
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.py" },
+    { "src": "/assets/(.*)", "dest": "/assets/$1" },
+    { "src": "/(.*\\.[a-z0-9]+)$", "dest": "/$1" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

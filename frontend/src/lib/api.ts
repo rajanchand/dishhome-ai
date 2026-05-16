@@ -1,7 +1,13 @@
 // ==================== API Base URL ====================
 const BASE: string = (() => {
-  if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE as string;
-  if (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")) return "/api";
+  const env = import.meta.env.VITE_API_BASE;
+  // Trust the env var only when it looks like a real URL / path
+  if (env && (env.startsWith("/") || env.startsWith("http"))) return env as string;
+  // Auto-detect Vercel deployment
+  if (typeof window !== "undefined" && (
+    window.location.hostname.includes("vercel.app") ||
+    window.location.hostname.includes("dishhome")
+  )) return "/api";
   return "http://127.0.0.1:8000";
 })();
 

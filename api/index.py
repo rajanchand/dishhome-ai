@@ -1,39 +1,41 @@
+"""Vercel serverless entrypoint — exposes the FastAPI app for @vercel/python.
+
+@vercel/python recognizes ASGI apps automatically when the module-level
+variable is named `app`. We strip the /api prefix via FastAPI's root_path
+so all routes work transparently.
+"""
 import sys
 import os
 
 # ── Setup Paths ──────────────────────────────────────────────────────
-# Add the project root and backend folder to sys.path
 _here = os.path.dirname(os.path.abspath(__file__))
-_parent = os.path.dirname(_here)
+_root = os.path.dirname(_here)
 
-if _parent not in sys.path:
-    sys.path.insert(0, _parent)
-if os.path.join(_parent, "backend") not in sys.path:
-    sys.path.insert(0, os.path.join(_parent, "backend"))
+# Add project root and backend/ to sys.path so `from app.main import app` works.
+for p in [_root, os.path.join(_root, "backend")]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
-# ── Import Real App ──────────────────────────────────────────────────
+# ── Import ───────────────────────────────────────────────────────────
 try:
-    from app.main import app as _real_app
-except Exception as e:
+    from app.main import app  # noqa: F811 — FastAPI instance
+
+    # Tell FastAPI it's mounted at /api so redirects etc. work correctly.
+    app.root_path = "/api"
+except Exception:
+    # If the real app can't boot, surface the error as a plain-text 500
+    # so it's diagnosable instead of silently returning index.html.
     import traceback
-    _error = traceback.format_exc()
-    _real_app = None
+    _tb = traceback.format_exc()
 
-async def app(scope, receive, send):
-    """ASGI wrapper: strip /api prefix so routes match."""
-    if _real_app is None:
-        if scope["type"] != "http": return
-        body = f"BOOT ERROR:\n\n{_error}".encode()
-        await send({"type": "http.response.start", "status": 500, "headers": [(b"content-type", b"text/plain")]})
-        await send({"type": "http.response.body", "body": body})
-        return
+    from fastapi import FastAPI
+    from fastapi.responses import PlainTextResponse
 
-    if scope["type"] in ("http", "websocket"):
-        path = scope.get("path", "/")
-        if path.startswith("/api"):
-            scope = dict(scope)
-            scope["path"] = path[4:] or "/"
-            scope["raw_path"] = scope["path"].encode()
-            scope["root_path"] = "/api"
-    
-    await _real_app(scope, receive, send)
+    app = FastAPI()
+
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    async def _boot_error(path: str):
+        return PlainTextResponse(
+            f"BOOT ERROR — the backend failed to start.\n\n{_tb}",
+            status_code=500,
+        )
