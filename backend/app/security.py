@@ -20,6 +20,11 @@ from argon2.exceptions import InvalidHash, VerifyMismatchError
 # the login endpoint snappy.
 _HASHER = PasswordHasher(time_cost=2, memory_cost=64 * 1024, parallelism=2)
 
+# Pre-computed dummy hash for timing-safe comparison when user doesn't exist.
+# Ensures verify_password takes the same time regardless of whether the
+# username is valid — prevents username enumeration via timing side-channel.
+DUMMY_HASH = _HASHER.hash("__dummy_timing_safe_placeholder__")
+
 # ----- Passwords -----
 
 PASSWORD_PREFIX = "$argon2"
@@ -59,6 +64,7 @@ def is_hashed(value: str) -> bool:
 
 SESSION_TTL_SECONDS = 24 * 60 * 60  # 24h sliding window
 SESSION_IDLE_RENEWAL_SECONDS = 60 * 60  # only bump expiry at most hourly to keep dict writes cheap
+MAX_SESSIONS_PER_USER = 10  # prevent session flooding
 
 
 class _Session:
@@ -95,6 +101,14 @@ def issue_session(
 ) -> str:
     token = secrets.token_urlsafe(32)
     with _SESSIONS_LOCK:
+        # Enforce per-user session limit — evict oldest sessions
+        user_tokens = [
+            (t, s) for t, s in _SESSIONS.items() if s.username == username
+        ]
+        if len(user_tokens) >= MAX_SESSIONS_PER_USER:
+            user_tokens.sort(key=lambda x: x[1].last_seen)
+            for old_tok, _ in user_tokens[: len(user_tokens) - MAX_SESSIONS_PER_USER + 1]:
+                _SESSIONS.pop(old_tok, None)
         _SESSIONS[token] = _Session(username, ttl, ip=ip, user_agent=user_agent)
     return token
 
@@ -395,7 +409,7 @@ async def geo_for_ip(ip: str) -> dict:
         import httpx
         async with httpx.AsyncClient(timeout=5.0) as c:
             r = await c.get(
-                f"http://ip-api.com/json/{ip}",
+                f"https://ip-api.com/json/{ip}",
                 params={"fields": "status,country,countryCode,city,regionName,lat,lon"},
             )
             d = r.json()

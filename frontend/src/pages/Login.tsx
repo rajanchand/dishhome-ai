@@ -9,8 +9,9 @@ export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("dishhome123");
+  const isDev = import.meta.env.DEV;
+  const [username, setUsername] = useState(isDev ? "admin" : "");
+  const [password, setPassword] = useState(isDev ? "dishhome123" : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reqId, setReqId] = useState<string | null>(null);
@@ -108,16 +109,18 @@ export default function Login() {
             {busy ? "Signing in..." : "Sign in"}
           </Button>
 
-          <div className="mt-6 text-xs text-dishhome-ink/50 border-t border-black/5 pt-4">
-            <div className="font-semibold uppercase tracking-widest mb-2">
-              Demo credentials
+          {isDev && (
+            <div className="mt-6 text-xs text-dishhome-ink/50 border-t border-black/5 pt-4">
+              <div className="font-semibold uppercase tracking-widest mb-2">
+                Demo credentials
+              </div>
+              <ul className="space-y-1">
+                <li><code className="text-dishhome-blue">admin</code> / dishhome123 — Super admin</li>
+                <li><code className="text-dishhome-blue">supervisor</code> / dishhome123 — Supervisor</li>
+                <li><code className="text-dishhome-blue">agent</code> / dishhome123 — Agent</li>
+              </ul>
             </div>
-            <ul className="space-y-1">
-              <li><code className="text-dishhome-blue">admin</code> / dishhome123 — Super admin</li>
-              <li><code className="text-dishhome-blue">supervisor</code> / dishhome123 — Supervisor</li>
-              <li><code className="text-dishhome-blue">agent</code> / dishhome123 — Agent</li>
-            </ul>
-          </div>
+          )}
         </form>
       </div>
     </div>

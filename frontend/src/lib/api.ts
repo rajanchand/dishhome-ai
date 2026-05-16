@@ -208,7 +208,7 @@ export interface LoginEvent {
 
 export interface LoginActivityResponse {
   events: LoginEvent[];
-  stats: any; // temporary
+  stats: LoginActivityStats;
 }
 
 export interface GeoInfo {

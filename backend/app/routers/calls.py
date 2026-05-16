@@ -117,8 +117,17 @@ def create_session(
 
 @router.websocket("/audio/{session_id}")
 async def audio_bridge(websocket: WebSocket, session_id: str) -> None:
-    # session_id will be used to route audio to the right call session in real impl.
-    del session_id
+    # Authenticate via query param: ws://host/calls/audio/123?token=abc
+    token = websocket.query_params.get("token", "")
+    if not token:
+        await websocket.close(code=4001, reason="Missing auth token")
+        return
+    from app.security import resolve_session
+    username = resolve_session(token)
+    if not username:
+        await websocket.close(code=4001, reason="Invalid or expired token")
+        return
+    del session_id  # will be used to route audio in real impl
     await websocket.accept()
     try:
         while True:

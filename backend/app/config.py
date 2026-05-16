@@ -9,16 +9,20 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
+    # Secret key for CSRF tokens / cookie signing. Generate with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(64))"
+    app_secret_key: str = ""
+
     # Public origin the backend is reachable at (ngrok URL in dev, real domain in prod).
     # Used to build absolute URLs in webhooks (Twilio fetches TwiML from this).
     public_base_url: str = ""
 
+    # SECURITY: Pin to exact deployment domains. Never use wildcards in production.
     cors_allowed_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:5173,http://127.0.0.1:5173,"
         "http://212.227.39.216:5173,"
-        "https://dishhome-ai-8hxd.vercel.app,"
-        "https://*.vercel.app"
+        "https://dishhome-ai-8hxd.vercel.app"
     )
 
     ollama_host: str = "http://localhost:11434"

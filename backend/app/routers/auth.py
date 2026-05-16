@@ -138,9 +138,11 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
 
     user = USERS.get(uname_raw)
     stored = user.get("password") if user else None
-    # Always run argon2 verify (against a dummy hash if user missing) so the
-    # response time is constant whether the username exists or not.
-    ok = bool(user) and verify_password(stored or "", payload.password)
+    # Always run argon2 verify (against a pre-computed dummy hash if user
+    # missing) so the response time is constant whether the username exists or
+    # not — prevents username enumeration via timing side-channel.
+    from app.security import DUMMY_HASH
+    ok = verify_password(stored or DUMMY_HASH, payload.password) and bool(user)
     if not ok:
         record_login_failure(ip, uname_raw)
         record_login_event(
