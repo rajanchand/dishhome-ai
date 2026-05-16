@@ -28,6 +28,6 @@ class ONTStatus(Base):
     rx_power_dbm: Mapped[float | None] = mapped_column(Float)
     tx_power_dbm: Mapped[float | None] = mapped_column(Float)
     uptime_hours: Mapped[int] = mapped_column(default=0)
-    last_reboot: Mapped[datetime | None] = mapped_column(func.now())
+    last_reboot: Mapped[datetime | None] = mapped_column(server_default=func.now())
     pppoe_session: Mapped[str | None] = mapped_column(String(50))
     area_outage: Mapped[bool] = mapped_column(Boolean, default=False)
