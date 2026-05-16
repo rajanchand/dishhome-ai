@@ -11,23 +11,20 @@ for p in [_root, os.path.join(_root, "backend")]:
         sys.path.insert(0, p)
 
 # ── Import ───────────────────────────────────────────────────────────
-# Vercel requires a top-level `app` variable — declare it here so
-# static analysis always finds it, even if the real import fails.
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 
-app: FastAPI  # top-level declaration for Vercel detection
+# Top-level assignment so Vercel's static analysis always finds `app`.
+app = FastAPI(title="DishHome AI Call Center")
 
 try:
-    from app.main import app as _real_app  # noqa: F811
+    from app.main import app as _real_app
 
     _real_app.root_path = "/api"
     app = _real_app
 except Exception:
     import traceback
-
     _tb = traceback.format_exc()
-    app = FastAPI()
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def _boot_error(path: str):
