@@ -1,8 +1,8 @@
 const _isIP = typeof window !== "undefined" && /^[0-9.]+$/.test(window.location.hostname);
-const BASE = import.meta.env.VITE_API_BASE || 
-             (typeof window !== "undefined" && window.location.hostname.includes("vercel.app") 
-               ? "/api" 
-               : "http://127.0.0.1:8000");
+const BASE = import.meta.env.VITE_API_BASE 
+  || (typeof window !== "undefined" && window.location.hostname.includes("vercel.app"))
+  ? "/api" 
+  : "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
   requestId?: string;
