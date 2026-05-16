@@ -8,6 +8,7 @@ from app.routers import (
     auth,
     calls,
     campaigns,
+    chat,
     faqs,
     health,
     huawei,
@@ -48,3 +49,4 @@ app.include_router(campaigns.router)
 app.include_router(inbox.router)
 app.include_router(admin.router)
 app.include_router(telephony.router)
+app.include_router(chat.router)

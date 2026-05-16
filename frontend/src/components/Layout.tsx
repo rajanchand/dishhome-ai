@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { DishHomeLogo } from "./Logo";
+import KhushiChatbot from "./KhushiChatbot";
 
 interface NavItem {
   to: string;
@@ -128,6 +129,9 @@ export default function Layout() {
       <main className="flex-1 min-w-0">
         <Outlet />
       </main>
+
+      {/* Khushi AI Chatbot — floating widget on all pages */}
+      <KhushiChatbot />
     </div>
   );
 }
