@@ -14,6 +14,7 @@ Web Speech API.
 
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,14 @@ from app.routers.auth import UserOut, current_user, require_permission
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
-UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "voice_uploads"
+# Detect if running on Vercel (read-only filesystem except for /tmp)
+IS_VERCEL = os.environ.get("VERCEL") == "1" or os.environ.get("VERCEL_ENV") is not None
+
+if IS_VERCEL:
+    UPLOAD_DIR = Path("/tmp/voice_uploads")
+else:
+    UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "voice_uploads"
+
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CATALOG_FILE = UPLOAD_DIR / "_catalog.json"
 DEFAULTS_FILE = UPLOAD_DIR / "_defaults.json"
