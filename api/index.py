@@ -1,5 +1,5 @@
 """Vercel serverless entrypoint — exposes the FastAPI app for @vercel/python."""
-import sys
+import sys # Force rebuild 1
 import os
 
 # ── Setup Paths ──────────────────────────────────────────────────────
