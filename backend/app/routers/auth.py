@@ -6,6 +6,7 @@ from typing import Annotated, Callable
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from app.db_repo import persist_audit, persist_login_event
 from app.mock_data import USERS
 from app.rbac import has_permission, permissions_for
 from app.security import (
@@ -105,8 +106,19 @@ def revoke_user_sessions(username: str) -> int:
     return _revoke_user_sessions(username)
 
 
+def _last_login_event() -> dict:
+    """Last entry we just appended via record_login_event."""
+    from app.security import _LOGIN_EVENTS  # private but stable in-process
+    return _LOGIN_EVENTS[-1]
+
+
+def _last_audit() -> dict:
+    from app.security import _AUDIT
+    return _AUDIT[-1]
+
+
 @router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, request: Request) -> LoginResponse:
+async def login(payload: LoginRequest, request: Request) -> LoginResponse:
     ip = _client_ip(request)
     user_agent = request.headers.get("user-agent", "")
     uname_raw = payload.username.strip().lower()
@@ -117,6 +129,7 @@ def login(payload: LoginRequest, request: Request) -> LoginResponse:
             username=uname_raw, ip=ip, user_agent=user_agent,
             result="failure", reason="rate_limited",
         )
+        await persist_login_event(_last_login_event())
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"Too many failed attempts. Try again in {retry_after}s.",
@@ -134,9 +147,9 @@ def login(payload: LoginRequest, request: Request) -> LoginResponse:
             username=uname_raw, ip=ip, user_agent=user_agent,
             result="failure", reason="bad_credentials",
         )
+        await persist_login_event(_last_login_event())
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
-    # Upgrade-in-place if argon2 parameters changed (or seed was plaintext).
     assert user is not None
     if needs_rehash(user["password"]):
         user["password"] = hash_password(payload.password)
@@ -148,6 +161,9 @@ def login(payload: LoginRequest, request: Request) -> LoginResponse:
         username=user["username"], ip=ip, user_agent=user_agent,
         result="success", session_prefix=token[:8],
     )
+    await persist_audit(_last_audit())
+    await persist_login_event(_last_login_event())
+
     from app.security import SESSION_TTL_SECONDS
     return LoginResponse(
         token=token,
@@ -157,7 +173,7 @@ def login(payload: LoginRequest, request: Request) -> LoginResponse:
 
 
 @router.post("/logout")
-def logout(
+async def logout(
     user: Annotated[UserOut, Depends(current_user)],
     request: Request,
 ) -> dict[str, str]:
@@ -165,6 +181,7 @@ def logout(
     if tok:
         revoke_session(tok)
     audit(actor=user.username, action="logout", target=user.username)
+    await persist_audit(_last_audit())
     return {"status": "logged_out", "username": user.username}
 
 

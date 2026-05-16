@@ -1,8 +1,9 @@
 // ==================== API Base URL ====================
-const BASE = import.meta.env.VITE_API_BASE 
-  || (typeof window !== "undefined" && window.location.hostname.includes("vercel.app"))
-  ? "/api" 
-  : "http://127.0.0.1:8000";
+const BASE: string = (() => {
+  if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE as string;
+  if (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")) return "/api";
+  return "http://127.0.0.1:8000";
+})();
 
 // ==================== Error & Token ====================
 export class ApiError extends Error {
@@ -236,6 +237,246 @@ export interface VoicePreviewResponse {
   sample_url?: string | null;
   audio_url?: string | null;
   engine?: "elevenlabs" | "browser-tts";
+}
+
+// ==================== Auth ====================
+export interface LoginResponse {
+  token: string;
+  user: User;
+  expires_in: number;
+}
+
+// ==================== Admin / RBAC ====================
+export interface AdminUser {
+  username: string;
+  name: string;
+  email: string;
+  role: string;
+  permissions: string[];
+  created_at?: string | null;
+  created_by?: string | null;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  permissions: string[];
+  user_count: number;
+}
+
+// ==================== Telephony ====================
+export interface TelephonyHealth {
+  twilio_enabled: boolean;
+  from_number: string | null;
+  public_base_url: string | null;
+  elevenlabs_enabled: boolean;
+}
+
+export interface CallSession {
+  session_id: string;
+  call_sid: string | null;
+  to: string;
+  from_: string;
+  voice_id: string;
+  language: string;
+  text: string;
+  status: string;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_sec: number | null;
+  campaign_id: string | null;
+  recording_url: string | null;
+}
+
+export interface DemoCallResponse {
+  mode: "twilio" | "mock";
+  campaign_id: string;
+  to: string;
+  voice_id: string;
+  language: string;
+  session_id: string;
+  call_sid?: string | null;
+  status: string;
+  script_preview?: string;
+  hint?: string;
+}
+
+export interface VoiceHealth {
+  elevenlabs_enabled: boolean;
+  model_id: string;
+  defaults_set: Record<string, boolean>;
+}
+
+// ==================== Calls ====================
+export interface CallSummary {
+  id: string;
+  caller_number: string;
+  called_number: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  language: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_sec: number;
+  status: string;
+  intent: string;
+  ai_confidence: number;
+}
+
+export interface TranscriptTurn {
+  role: string;
+  text: string;
+}
+
+export interface CallDetail extends CallSummary {
+  resolution: string | null;
+  transcript: TranscriptTurn[];
+}
+
+export interface CallStats {
+  total: number;
+  in_progress: number;
+  resolved: number;
+  ticketed: number;
+  avg_handle_sec: number;
+  ai_resolution_rate: number;
+}
+
+// ==================== Monitoring ====================
+export interface LoginActivityStats {
+  total_events: number;
+  logins_24h_success: number;
+  logins_24h_failure: number;
+  unique_ips_24h: number;
+  unique_users_24h: number;
+}
+
+export interface MetricsSnapshot {
+  total_requests: number;
+  error_rate: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  errors_by_status: Record<string, number>;
+  top_routes: [string, number][];
+  window_size?: number;
+}
+
+// ==================== Huawei ====================
+export interface HuaweiOnt {
+  ont_id: string;
+  device_model: string;
+  serial_number: string;
+  firmware_version: string;
+  hardware_version: string;
+  olt_id: string;
+  olt_port: string;
+  ont_index: number;
+  online: boolean;
+  rx_power_dbm: number | null;
+  tx_power_dbm: number | null;
+  line_attenuation_db: number | null;
+  uptime_hours: number;
+  last_reboot: string;
+  pppoe_session: string;
+  wifi_radio_2g: boolean;
+  wifi_radio_5g: boolean;
+  error_state: string | null;
+  area_outage: boolean;
+}
+
+export interface HuaweiOlt {
+  olt_id: string;
+  site: string;
+  online: boolean;
+  active_onts: number;
+  uptime_hours: number;
+  degraded?: boolean;
+}
+
+export interface Diagnosis {
+  customer_id: string;
+  ont_id: string;
+  scenario: string;
+  headline: string;
+  tone: "info" | "warn" | "danger" | "success";
+  advice: string;
+  recommended_action:
+    | "remote_reboot"
+    | "wait_for_outage"
+    | "escalate_noc"
+    | "dispatch_field"
+    | "reauth_pppoe"
+    | "remote_wifi_toggle"
+    | "none";
+  ont: HuaweiOnt;
+  olt: HuaweiOlt | null;
+}
+
+export interface DemoCustomer {
+  customer_id: string;
+  name: string;
+  mobile: string;
+  address: string;
+  package: string;
+  ont_id: string;
+  device_model: string | null;
+  scenario: string;
+  headline: string;
+  tone: "info" | "warn" | "danger" | "success";
+  online: boolean;
+  rx_power_dbm: number | null;
+}
+
+// ==================== FAQs ====================
+export interface Faq {
+  id: string;
+  question_en?: string | null;
+  question_ne?: string | null;
+  answer_en?: string | null;
+  answer_ne?: string | null;
+  category?: string | null;
+  tags: string[];
+}
+
+export interface FaqAskResponse {
+  query: string;
+  language: string;
+  answer: string | null;
+  matched: { faq: Faq; score: number }[];
+}
+
+// ==================== Campaigns ====================
+export interface CampaignStats {
+  dialed: number;
+  connected: number;
+  completed: number;
+  failed: number;
+}
+
+export interface Campaign {
+  id: string;
+  name: string;
+  language: "ne" | "en";
+  voice_id: string;
+  script: string;
+  status: "draft" | "running" | "paused" | "completed";
+  contacts_count: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  stats: CampaignStats;
+}
+
+export interface CampaignContact {
+  id: string;
+  name: string;
+  mobile: string;
+  status: string;
+  attempts: number;
+  outcome: string | null;
 }
 
 // ==================== URL Helpers ====================

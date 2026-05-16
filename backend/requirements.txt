@@ -1,6 +1,6 @@
 fastapi==0.115.4
 uvicorn[standard]==0.32.0
-pydantic==2.9.2
+pydantic>=2.10.0
 pydantic[email]
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
