@@ -112,6 +112,10 @@ export function useAsyncErrorToast() {
   const t = useToast();
   return useCallback(
     (err: unknown, fallback = "Something went wrong") => {
+      // Skip 401s — handled by the global session-expiry redirect in api.ts
+      if (err && typeof err === "object" && "status" in err && (err as { status: number }).status === 401) {
+        return;
+      }
       const msg = err instanceof Error ? err.message : fallback;
       const reqId =
         err && typeof err === "object" && "requestId" in err

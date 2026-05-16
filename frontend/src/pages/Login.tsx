@@ -15,6 +15,7 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reqId, setReqId] = useState<string | null>(null);
+  const isExpired = new URLSearchParams(window.location.search).has("expired");
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -76,6 +77,13 @@ export default function Login() {
           <p className="text-sm text-dishhome-ink/60 mt-1">
             Agent, supervisor, and admin access.
           </p>
+
+          {isExpired && (
+            <div className="mt-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              <div className="font-medium">Session expired</div>
+              <div className="text-xs mt-0.5 opacity-70">Please sign in again to continue.</div>
+            </div>
+          )}
 
           <div className="mt-6 space-y-4">
             <Input

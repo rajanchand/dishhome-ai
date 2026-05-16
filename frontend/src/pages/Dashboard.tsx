@@ -24,14 +24,27 @@ export default function Dashboard() {
   const errToast = useAsyncErrorToast();
 
   useEffect(() => {
-    api.get<CallStats>("/calls/stats").then(setStats).catch((e) => errToast(e));
-    api.get<CallSummary[]>("/calls").then(setCalls).catch((e) => errToast(e));
+    let stopped = false;
+    const stop = (e: unknown) => {
+      // If it's a 401, don't show toast — the global handler redirects
+      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
+      errToast(e);
+    };
+    api.get<CallStats>("/calls/stats").then(setStats).catch(stop);
+    api.get<CallSummary[]>("/calls").then(setCalls).catch(stop);
 
-    const loadMetrics = () =>
-      api.get<MetricsSnapshot>("/metrics").then(setMetrics).catch(() => {});
+    const loadMetrics = () => {
+      if (stopped) return;
+      api.get<MetricsSnapshot>("/metrics").then(setMetrics).catch((e) => {
+        // Stop polling on auth failure
+        if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) {
+          stopped = true;
+        }
+      });
+    };
     loadMetrics();
     const i = window.setInterval(loadMetrics, 5000);
-    return () => window.clearInterval(i);
+    return () => { stopped = true; window.clearInterval(i); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

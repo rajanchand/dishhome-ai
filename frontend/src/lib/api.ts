@@ -11,6 +11,19 @@ const BASE: string = (() => {
   return "http://127.0.0.1:8000";
 })();
 
+// ==================== Session Expiry Guard ====================
+// Prevents multiple concurrent 401s from spamming the redirect.
+let _redirecting = false;
+function _handleSessionExpired() {
+  if (_redirecting) return;
+  _redirecting = true;
+  localStorage.removeItem("dh_token");
+  // Only redirect if not already on the login page
+  if (!window.location.pathname.startsWith("/login")) {
+    window.location.href = "/login?expired=1";
+  }
+}
+
 // ==================== Error & Token ====================
 export class ApiError extends Error {
   requestId?: string;
@@ -77,7 +90,10 @@ async function request<T>(
       msg = data?.error?.message ?? data?.detail ?? msg;
       code = data?.error?.code;
     } catch {}
-    if (res.status === 401) setToken(null);
+    if (res.status === 401) {
+      _handleSessionExpired();
+      throw new ApiError(res.status, "Session expired", { requestId: reqId, code: "session_expired" });
+    }
     throw new ApiError(res.status, msg, { requestId: reqId, code });
   }
 
