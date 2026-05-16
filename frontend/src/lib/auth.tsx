@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, setToken, type LoginResponse, type User } from "./api";
+import { api, setToken, markSessionEstablished, type LoginResponse, type User } from "./api";
 
 interface AuthState {
   user: User | null;
@@ -29,7 +29,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     api
       .get<User>("/auth/me")
-      .then(setUser)
+      .then((u) => {
+        setUser(u);
+        markSessionEstablished();
+      })
       .catch(() => setToken(null))
       .finally(() => setLoading(false));
   }, []);
@@ -41,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setToken(res.token);
     setUser(res.user);
+    markSessionEstablished();
   }, []);
 
   const logout = useCallback(async () => {

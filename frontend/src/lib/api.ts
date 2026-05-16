@@ -13,8 +13,22 @@ const BASE: string = (() => {
 
 // ==================== Session Expiry Guard ====================
 // Prevents multiple concurrent 401s from spamming the redirect.
+// Only triggers when user was actively using the app (not during
+// the initial /auth/me probe or login flow).
 let _redirecting = false;
+let _sessionEstablished = false;  // set to true after first successful request
+
+export function markSessionEstablished() {
+  _sessionEstablished = true;
+  _redirecting = false;
+}
+
 function _handleSessionExpired() {
+  // Don't redirect during initial auth probe or login flow
+  if (!_sessionEstablished) {
+    localStorage.removeItem("dh_token");
+    return;
+  }
   if (_redirecting) return;
   _redirecting = true;
   localStorage.removeItem("dh_token");
