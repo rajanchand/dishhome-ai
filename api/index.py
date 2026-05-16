@@ -1,14 +1,15 @@
 """Vercel serverless entry-point.
 
-Vercel rewrites /api/* to this function.  The ASGI scope still contains
-the *original* request path (e.g. /api/auth/login), so we mount the
-real FastAPI app at the /api prefix so its routes (e.g. /auth/login)
-match correctly after the prefix is stripped.
+Vercel rewrites /api/* to this function.  The ASGI scope still carries
+the *original* request path (e.g. /api/auth/login), but the real
+FastAPI app defines routes without the /api prefix (/auth/login).
+
+We solve this with a thin ASGI wrapper that strips "/api" from the
+incoming path before delegating to the real app.
 """
 
 import sys
 import os
-import traceback
 
 # ── Make the backend package importable ──────────────────────────────
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -21,44 +22,55 @@ for p in _candidates:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# ── Try to import and mount the real app ─────────────────────────────
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-
-app = FastAPI()
-
-# Add permissive CORS for the outer wrapper – the real app has its own
-# CORS middleware too, but when mounted as a sub-app the outer app
-# needs to handle OPTIONS preflight that arrives *before* routing into
-# the sub-app.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# ── Try to import the real app ───────────────────────────────────────
 try:
-    from app.main import app as real_app
-    # Mount at /api so that /api/auth/login → real_app sees /auth/login
-    app.mount("/api", real_app)
-except Exception as e:
-    error_trace = traceback.format_exc()
+    from app.main import app as _real_app
 
-    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
-    async def catch_all(path: str):
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Backend initialization failed",
-                "message": str(e),
-                "traceback": error_trace,
-                "cwd": os.getcwd(),
-                "file": __file__,
-                "sys_path": sys.path[:6],
-                "candidates": _candidates,
-                "found_backend": [os.path.exists(p) for p in _candidates],
-            },
-        )
+    async def app(scope, receive, send):
+        """ASGI wrapper: strip /api prefix so routes match."""
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "/")
+            if path.startswith("/api"):
+                scope = dict(scope)
+                scope["path"] = path[4:] or "/"
+                scope["root_path"] = scope.get("root_path", "") + "/api"
+        await _real_app(scope, receive, send)
+
+except Exception as _boot_err:
+    import traceback as _tb
+    _boot_trace = _tb.format_exc()
+
+    async def app(scope, receive, send):
+        """Fallback: return a diagnostic JSON payload."""
+        if scope["type"] == "lifespan":
+            # Accept lifespan but do nothing
+            while True:
+                msg = await receive()
+                if msg["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif msg["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+        if scope["type"] != "http":
+            return
+        import json
+        body = json.dumps({
+            "error": "Backend initialization failed",
+            "message": str(_boot_err),
+            "traceback": _boot_trace,
+            "cwd": os.getcwd(),
+            "candidates": _candidates,
+            "found": [os.path.exists(p) for p in _candidates],
+        }).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 500,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"access-control-allow-origin", b"*"],
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
