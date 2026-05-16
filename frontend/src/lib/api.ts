@@ -1,7 +1,7 @@
 const _isIP = typeof window !== "undefined" && /^[0-9.]+$/.test(window.location.hostname);
-const BASE = (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")) 
+const BASE = (typeof window !== "undefined" && (window.location.hostname.includes("vercel.app") || _isIP)) 
   ? "/api" 
-  : (_isIP ? `http://${window.location.hostname}:8000` : "http://127.0.0.1:8000");
+  : "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
   requestId?: string;
