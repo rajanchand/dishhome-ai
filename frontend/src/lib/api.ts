@@ -1,5 +1,8 @@
-const _isDeployed = typeof window !== "undefined" && !["localhost", "127.0.0.1"].includes(window.location.hostname);
-const BASE = import.meta.env.VITE_API_BASE ?? (_isDeployed ? "/api" : "http://127.0.0.1:8000");
+const BASE = (typeof window !== "undefined" && 
+  !window.location.hostname.includes("localhost") && 
+  !window.location.hostname.includes("127.0.0.1")) 
+  ? "/api" 
+  : "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
   requestId?: string;
