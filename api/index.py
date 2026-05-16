@@ -1,76 +1,68 @@
 """Vercel serverless entry-point.
 
-Vercel rewrites /api/* to this function.  The ASGI scope still carries
-the *original* request path (e.g. /api/auth/login), but the real
-FastAPI app defines routes without the /api prefix (/auth/login).
-
-We solve this with a thin ASGI wrapper that strips "/api" from the
-incoming path before delegating to the real app.
+Vercel rewrites /api/* to this function. We strip the /api prefix 
+at the ASGI level so the real FastAPI app (which doesn't know about /api)
+can handle the routes correctly.
 """
 
 import sys
 import os
+import traceback
 
-# ── Make the backend package importable ──────────────────────────────
-_here = os.path.dirname(os.path.abspath(__file__))
-_candidates = [
-    os.path.join(_here, "backend"),
-    os.path.join(_here, "..", "backend"),
-    os.path.join(os.getcwd(), "backend"),
-]
-for p in _candidates:
-    if p not in sys.path:
-        sys.path.insert(0, p)
+# ── Setup Paths ──────────────────────────────────────────────────────
+# On Vercel, the function runs in /var/task. The backend/ folder is a 
+# sibling to the api/ folder if included correctly.
+cwd = os.getcwd()
+here = os.path.dirname(os.path.abspath(__file__))
+parent = os.path.dirname(here)
 
-# ── Try to import the real app ───────────────────────────────────────
+# Log paths to help diagnostics if it fails
+sys.path.insert(0, parent)
+sys.path.insert(0, os.path.join(parent, "backend"))
+
+# ── Import Real App ──────────────────────────────────────────────────
 try:
     from app.main import app as _real_app
 
     async def app(scope, receive, send):
-        """ASGI wrapper: strip /api prefix so routes match."""
         if scope["type"] in ("http", "websocket"):
             path = scope.get("path", "/")
+            # Strip /api prefix if present
             if path.startswith("/api"):
                 scope = dict(scope)
                 scope["path"] = path[4:] or "/"
-                scope["root_path"] = scope.get("root_path", "") + "/api"
+                # Ensure the app knows where it is
+                scope["root_path"] = "/api"
+        
         await _real_app(scope, receive, send)
 
-except Exception as _boot_err:
-    import traceback as _tb
-    _boot_trace = _tb.format_exc()
-
+except Exception:
+    error_trace = traceback.format_exc()
+    
     async def app(scope, receive, send):
-        """Fallback: return a diagnostic JSON payload."""
-        if scope["type"] == "lifespan":
-            # Accept lifespan but do nothing
-            while True:
-                msg = await receive()
-                if msg["type"] == "lifespan.startup":
-                    await send({"type": "lifespan.startup.complete"})
-                elif msg["type"] == "lifespan.shutdown":
-                    await send({"type": "lifespan.shutdown.complete"})
-                    return
         if scope["type"] != "http":
             return
+        
+        # Diagnostic response
         import json
-        body = json.dumps({
-            "error": "Backend initialization failed",
-            "message": str(_boot_err),
-            "traceback": _boot_trace,
-            "cwd": os.getcwd(),
-            "candidates": _candidates,
-            "found": [os.path.exists(p) for p in _candidates],
+        payload = json.dumps({
+            "error": "Backend Boot Failure",
+            "trace": error_trace,
+            "sys_path": sys.path,
+            "cwd": cwd,
+            "contents": os.listdir(cwd) if os.path.exists(cwd) else "cwd_missing",
+            "parent_contents": os.listdir(parent) if os.path.exists(parent) else "parent_missing"
         }).encode()
+        
         await send({
             "type": "http.response.start",
             "status": 500,
             "headers": [
-                [b"content-type", b"application/json"],
-                [b"access-control-allow-origin", b"*"],
+                (b"content-type", b"application/json"),
+                (b"access-control-allow-origin", b"*"),
             ],
         })
         await send({
             "type": "http.response.body",
-            "body": body,
+            "body": payload,
         })
