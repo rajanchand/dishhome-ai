@@ -33,6 +33,7 @@ async def app(scope, receive, send):
         if path.startswith("/api"):
             scope = dict(scope)
             scope["path"] = path[4:] or "/"
+            scope["raw_path"] = scope["path"].encode()
             scope["root_path"] = "/api"
     
     await _real_app(scope, receive, send)
