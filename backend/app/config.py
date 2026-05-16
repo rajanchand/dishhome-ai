@@ -15,7 +15,9 @@ class Settings(BaseSettings):
 
     cors_allowed_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:5173,http://127.0.0.1:5173"
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "https://dishhome-ai-8hxd.vercel.app,"
+        "https://*.vercel.app"
     )
 
     ollama_host: str = "http://localhost:11434"
