@@ -86,7 +86,14 @@ class Settings(BaseSettings):
     @property
     def effective_database_url(self) -> str:
         if self.database_url:
-            return self.database_url
+            cleaned = self.database_url.strip()
+            # Handle copy-paste errors of the format: DATABASE_URL="postgresql://..."
+            if cleaned.startswith("DATABASE_URL="):
+                cleaned = cleaned[len("DATABASE_URL="):].strip()
+            # Strip outer single/double quotes if present
+            if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+                cleaned = cleaned[1:-1].strip()
+            return cleaned
         if not (self.postgres_host and self.postgres_db and self.postgres_user and self.postgres_password):
             return ""
         user = quote_plus(self.postgres_user)
