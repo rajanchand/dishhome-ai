@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
@@ -17,10 +18,15 @@ async def seed_db():
         logger.error("No database URL configured!")
         return
 
-    engine = create_async_engine(settings.effective_database_url, echo=False)
+    raw_url = settings.effective_database_url
+    url = raw_url.replace("postgresql://", "postgresql+asyncpg://")
+    engine = create_async_engine(url, echo=False)
     
     # Create all tables (in a real scenario, Alembic handles this, but for testing we can create them)
+    from sqlalchemy import text
     async with engine.begin() as conn:
+        logger.info("Creating schema dh...")
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS dh"))
         logger.info("Creating tables...")
         await conn.run_sync(Base.metadata.create_all)
         
@@ -44,6 +50,7 @@ async def seed_db():
                     address=data["address"],
                     package=data["package"],
                     balance_npr=data["balance_npr"],
+                    due_date=datetime.strptime(data["due_date"], "%Y-%m-%d").date() if data.get("due_date") else None,
                     status=data["status"],
                     ont_id=data["ont_id"]
                 ))
