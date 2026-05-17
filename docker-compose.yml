@@ -48,7 +48,7 @@ services:
     image: alpine/socat
     command: TCP-LISTEN:${FREESWITCH_AUDIOSOCKET_PORT:-4000},fork,reuseaddr EXEC:"/bin/cat"
     ports:
-      - "${FREESWITCH_AUDIOSOCKET_PORT:-4000}:${FREESWITCH_AUDIOSOCKET_PORT:-4000}"
+      - "4002:${FREESWITCH_AUDIOSOCKET_PORT:-4000}"
     restart: unless-stopped
 
   backend:
@@ -78,8 +78,7 @@ services:
       dockerfile: Dockerfile
       target: ${FRONTEND_BUILD_TARGET:-development}
     ports:
-      - "5173:5173"
-      - "80:80"
+      - "5173:3000"
     environment:
       - VITE_API_URL=http://localhost:${APP_PORT:-8000}
     depends_on:
