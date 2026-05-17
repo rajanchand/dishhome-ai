@@ -59,7 +59,7 @@ async def list_calls(
         CallSummary(
             id=c.id,
             caller_number=c.phone_number,
-            called_number="DishHome AI",
+            called_number=c.called_number or "DishHome AI",
             customer_id=c.customer_id,
             customer_name=c.customer_name,
             language=c.language,
@@ -67,9 +67,9 @@ async def list_calls(
             ended_at=c.end_time.isoformat() if c.end_time else None,
             duration_sec=c.duration_seconds or 0,
             status=c.status,
-            intent="unknown",
-            ai_confidence=0.0,
-            sentiment_score=c.sentiment_score or 0.0,
+            intent=c.intent or "unknown",
+            ai_confidence=float(c.ai_confidence) if c.ai_confidence is not None else 0.0,
+            sentiment_score=1.0 if c.sentiment == "positive" else (0.0 if c.sentiment == "negative" else 0.5),
         )
         for c in calls
     ]
@@ -81,8 +81,8 @@ async def stats(
 ) -> dict[str, int | float]:
     total = (await db.execute(select(func.count(Call.id)))).scalar_one() or 0
     in_progress = (await db.execute(select(func.count(Call.id)).where(Call.status == 'in_progress'))).scalar_one() or 0
-    resolved = (await db.execute(select(func.count(Call.id)).where(Call.status == 'completed'))).scalar_one() or 0
-    ticketed = (await db.execute(select(func.count(Call.id)).where(Call.status == 'failed'))).scalar_one() or 0
+    resolved = (await db.execute(select(func.count(Call.id)).where(Call.status == 'resolved'))).scalar_one() or 0
+    ticketed = (await db.execute(select(func.count(Call.id)).where(Call.status == 'ticket_created'))).scalar_one() or 0
     sum_duration = (await db.execute(select(func.sum(Call.duration_seconds)))).scalar_one() or 0
 
     avg_handle = round(sum_duration / total, 1) if total else 0
@@ -110,7 +110,7 @@ async def call_detail(
     return CallDetail(
         id=c.id,
         caller_number=c.phone_number,
-        called_number="DishHome AI",
+        called_number=c.called_number or "DishHome AI",
         customer_id=c.customer_id,
         customer_name=c.customer_name,
         language=c.language,
@@ -118,10 +118,10 @@ async def call_detail(
         ended_at=c.end_time.isoformat() if c.end_time else None,
         duration_sec=c.duration_seconds or 0,
         status=c.status,
-        resolution=None,
-        intent="unknown",
-        ai_confidence=0.0,
-        sentiment_score=c.sentiment_score or 0.0,
+        resolution=c.resolution,
+        intent=c.intent or "unknown",
+        ai_confidence=float(c.ai_confidence) if c.ai_confidence is not None else 0.0,
+        sentiment_score=1.0 if c.sentiment == "positive" else (0.0 if c.sentiment == "negative" else 0.5),
         transcript=[TranscriptTurn(**t) for t in (c.transcript or [])],
     )
 

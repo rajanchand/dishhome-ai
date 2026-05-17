@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:70b"
 
+    freeswitch_audiosocket_host: str = "0.0.0.0"
+    freeswitch_audiosocket_port: int = 4000
+
     redis_host: str = "localhost"
     redis_port: int = 6379
 
