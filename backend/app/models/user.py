@@ -18,7 +18,7 @@ class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = {"schema": "dh"}
 
-    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    token: Mapped[str] = mapped_column(String(500), primary_key=True)
     username: Mapped[str] = mapped_column(String(80), ForeignKey("dh.users.username"), nullable=False)
     issued_at: Mapped[float] = mapped_column(server_default="0")
     expires_at: Mapped[float] = mapped_column(nullable=False)
