@@ -8,7 +8,7 @@ from app.config import settings
 from app.models.base import Base
 # Import all models to ensure they are registered with Base
 from app.models import *
-from app.mock_data import CUSTOMERS, ONT_STATUS, CALLS, LABELS, SAVED_REPLIES, CONTACTS, CONVERSATIONS, FAQS
+from app.mock_data import CUSTOMERS, ONT_STATUS, CALLS, LABELS, SAVED_REPLIES, CONTACTS, CONVERSATIONS, FAQS, USERS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("seed")
@@ -53,6 +53,18 @@ async def seed_db():
                     due_date=datetime.strptime(data["due_date"], "%Y-%m-%d").date() if data.get("due_date") else None,
                     status=data["status"],
                     ont_id=data["ont_id"]
+                ))
+                
+        # Users
+        for uname, udata in USERS.items():
+            u = await session.get(User, uname)
+            if not u:
+                session.add(User(
+                    username=udata["username"],
+                    full_name=udata["name"],
+                    email=udata["email"],
+                    role=udata["role"],
+                    password_hash=udata["password"]
                 ))
         
         # Commit
