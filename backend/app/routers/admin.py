@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.config import settings
 from app.database import get_db_session
 from app.models.user import User, Session as UserSession
 from app.rbac import ROLE_ORDER, ROLE_PERMISSIONS, permissions_for
@@ -403,7 +404,8 @@ async def revoke_one_session(
     actor: Annotated[UserOut, Depends(require_permission("users.manage"))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str | bool]:
-    # In production we'd use a better way than startswith if possible
+    if len(token_prefix) < 8:
+        raise HTTPException(400, "Token prefix must be at least 8 characters")
     result = await db.execute(delete(UserSession).where(UserSession.token.like(f"{token_prefix}%")))
     if result.rowcount == 0:
         raise HTTPException(404, "No session matched that prefix")
@@ -459,6 +461,8 @@ async def issue_token_for_user(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, str]:
     """Diagnostic: mint a session token for another user (super_admin only)."""
+    if settings.app_env != "development":
+        raise HTTPException(404, "Not found")
     if actor.role != "super_admin":
         raise HTTPException(403, "Only super_admin may impersonate")
     

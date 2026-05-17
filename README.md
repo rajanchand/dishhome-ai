@@ -4,7 +4,13 @@ AI-powered ISP call center system for Dish Media Network (DishHome). Carrier-gra
 
 ## Status
 
-Early scaffold. The architecture is fully designed; runnable services are stubs that boot and pass health checks.
+Working portal + FastAPI backend. The app includes auth, admin/user management,
+live-call views, inbox, contacts, FAQs, campaign flows, voice lab, Huawei/OSS
+mock diagnostics, metrics, and Twilio/ElevenLabs integration surfaces.
+
+Telephony, STT, LLM, and TTS are still integration-stage: the interfaces and
+demo flows exist, but production SIP/media, streaming STT, LangGraph tooling,
+and branded TTS need to be wired before real customer traffic.
 
 ## Repository layout
 
@@ -28,9 +34,9 @@ Early scaffold. The architecture is fully designed; runnable services are stubs 
 
 ```sh
 cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+python3.13 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 # http://localhost:8000/health -> {"status":"ok"}
 ```
 
@@ -40,8 +46,10 @@ uvicorn app.main:app --reload
 cd frontend
 npm install
 npm run dev
-# Open the URL Vite prints
+# http://127.0.0.1:3000
 ```
+
+Demo login: `admin` / `dishhome123`.
 
 ### Full stack (Docker)
 

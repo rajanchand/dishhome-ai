@@ -1,8 +1,8 @@
 import logging
+import urllib.parse
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
@@ -22,24 +22,17 @@ async def connect_db():
 
     try:
         log.info("Connecting to Supabase Postgres (SQLAlchemy 2.0)...")
-        # Ensure the URL uses asyncpg
+        # Ensure the URL uses asyncpg.
         url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
-        
-        # Remove pgbouncer query parameter as asyncpg doesn't support it
-        if "pgbouncer=" in url:
-            import urllib.parse
-            parsed = urllib.parse.urlparse(url)
-            query_params = urllib.parse.parse_qsl(parsed.query)
-            filtered_params = [kv for kv in query_params if kv[0] != "pgbouncer"]
-            new_query = urllib.parse.urlencode(filtered_params)
-            url = urllib.parse.ParseResult(
-                scheme=parsed.scheme,
-                netloc=parsed.netloc,
-                path=parsed.path,
-                params=parsed.params,
-                query=new_query,
-                fragment=parsed.fragment
-            ).geturl()
+
+        parsed = urllib.parse.urlparse(url)
+        query_params = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+        # asyncpg does not understand Supabase's pgbouncer marker, and
+        # SQLAlchemy's asyncpg dialect needs its own cache disabled for
+        # transaction/statement poolers.
+        query_params.pop("pgbouncer", None)
+        query_params.setdefault("prepared_statement_cache_size", "0")
+        url = parsed._replace(query=urllib.parse.urlencode(query_params)).geturl()
         
         import uuid
         engine = create_async_engine(

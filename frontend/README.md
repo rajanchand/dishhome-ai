@@ -9,19 +9,24 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (defaults to `http://localhost:5173`).
+Open the URL Vite prints. This project pins Vite to `http://localhost:3000`
+and proxies API routes to FastAPI on `http://127.0.0.1:8000`.
 
 ## Layout
 
 ```
 src/
-├── main.tsx      App bootstrap
-├── App.tsx       Placeholder dashboard
-└── index.css     Tailwind directives + base styles
+├── main.tsx       App bootstrap
+├── App.tsx        Protected routes
+├── components/    Layout, UI primitives, toast, chatbot
+├── lib/           API client and auth provider
+├── pages/         Dashboard, calls, inbox, contacts, admin, voice, campaigns
+└── index.css      Tailwind directives + base styles
 ```
 
 ## Next steps
 
-- Agent live queue + transcript view + one-click takeover.
-- Supervisor panel.
-- Super admin panel (model + voice management, RAG ingest, analytics).
+- Replace remaining symbol nav icons with `lucide-react`.
+- Add real-time call transcript updates over WebSocket.
+- Add i18n for Nepali/English UI strings.
+- Add automated browser smoke tests for the protected routes.
