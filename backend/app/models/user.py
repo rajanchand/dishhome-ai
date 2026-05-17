@@ -9,7 +9,7 @@ class User(Base):
 
     username: Mapped[str] = mapped_column(String(80), primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str] = mapped_column("name", String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False, server_default="agent")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

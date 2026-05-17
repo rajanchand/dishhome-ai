@@ -25,6 +25,23 @@ async def connect_db():
         # Ensure the URL uses asyncpg
         url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
         
+        # Remove pgbouncer query parameter as asyncpg doesn't support it
+        if "pgbouncer=" in url:
+            import urllib.parse
+            parsed = urllib.parse.urlparse(url)
+            query_params = urllib.parse.parse_qsl(parsed.query)
+            filtered_params = [kv for kv in query_params if kv[0] != "pgbouncer"]
+            new_query = urllib.parse.urlencode(filtered_params)
+            url = urllib.parse.ParseResult(
+                scheme=parsed.scheme,
+                netloc=parsed.netloc,
+                path=parsed.path,
+                params=parsed.params,
+                query=new_query,
+                fragment=parsed.fragment
+            ).geturl()
+        
+        import uuid
         engine = create_async_engine(
             url,
             pool_size=10,
@@ -32,6 +49,10 @@ async def connect_db():
             pool_timeout=60,
             pool_recycle=1800,
             echo=False,
+            connect_args={
+                "prepared_statement_name_func": lambda: f"__asyncpg_{uuid.uuid4()}__",
+                "statement_cache_size": 0,
+            }
         )
         async_session_maker = async_sessionmaker(
             engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
