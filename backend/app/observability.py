@@ -125,8 +125,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 "Unhandled error %s %s", request.method, request.url.path
             )
             request_id_var.reset(token)
-            import traceback
-            tb = traceback.format_exc()
             return JSONResponse(
                 status_code=500,
                 content={
@@ -134,7 +132,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                         "code": "internal_error",
                         "message": "Internal server error",
                         "request_id": rid,
-                        "traceback": tb,
                     }
                 },
                 headers={"x-request-id": rid},
