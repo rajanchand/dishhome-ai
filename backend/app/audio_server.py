@@ -1,52 +1,158 @@
 import asyncio
 import logging
 import struct
+import numpy as np
 from typing import Dict
+from faster_whisper import WhisperModel
+import os
 
 from app.config import settings
+from app.agent import run_conversation_agent
+
+try:
+    from piper import PiperVoice
+    HAS_PIPER = True
+except ImportError:
+    HAS_PIPER = False
 
 log = logging.getLogger("dishhome.audio")
 
 class AudioSession:
-    def __init__(self, call_id: str):
+    def __init__(self, call_id: str, asr_model: WhisperModel, tts_voice=None):
         self.call_id = call_id
-        self.buffer = bytearray()
-        self.is_active = True
+        self.asr_model = asr_model
+        self.tts_voice = tts_voice
+        self.audio_buffer = bytearray()
+        self.silence_frames = 0
+        self.is_speaking = False
 
-    async def process_frame(self, frame: bytes):
-        # Here we would feed the frame into Silero VAD and then Faster-Whisper
-        # For now, we just log the received frame size
-        # log.debug(f"Received {len(frame)} bytes for {self.call_id}")
-        pass
+    async def process_frame(self, frame: bytes, writer: asyncio.StreamWriter):
+        self.audio_buffer.extend(frame)
+        
+        # Simple energy-based VAD (Replace with Silero in production)
+        audio_array = np.frombuffer(frame, dtype=np.int16)
+        energy = np.abs(audio_array).mean()
+        
+        if energy > 500:
+            self.silence_frames = 0
+            self.is_speaking = True
+        else:
+            self.silence_frames += 1
+            
+        # Utterance complete if silent for > 1s
+        if self.is_speaking and self.silence_frames > 50:
+            audio_np = np.frombuffer(self.audio_buffer, dtype=np.int16).astype(np.float32) / 32768.0
+            # Faster-Whisper expects 16kHz
+            audio_16k = np.repeat(audio_np, 2)
+            
+            log.info(f"[{self.call_id}] Running ASR...")
+            # We must run this in an executor to avoid blocking the asyncio loop!
+            loop = asyncio.get_running_loop()
+            segments, info = await loop.run_in_executor(None, lambda: self.asr_model.transcribe(audio_16k, beam_size=1, language="en"))
+            text = "".join([s.text for s in segments]).strip()
+            
+            self.audio_buffer.clear()
+            self.is_speaking = False
+            self.silence_frames = 0
+            
+            if text:
+                log.info(f"[{self.call_id}] Customer: {text}")
+                # Dispatch the agent and TTS (pass self.tts_voice if we have one)
+                # Note: To pass tts_voice, we need it on the session
+                await self.run_agent_and_tts(text, writer, self.tts_voice)
+                
+        # Guard against buffer bloat
+        if not self.is_speaking and len(self.audio_buffer) > 16000 * 5:
+            self.audio_buffer.clear()
+
+    async def run_agent_and_tts(self, text: str, writer: asyncio.StreamWriter, tts_voice=None):
+        # 1. LLM / LangGraph Agent
+        response_text = await run_conversation_agent(self.call_id, text)
+        log.info(f"[{self.call_id}] Agent: {response_text}")
+        
+        # 2. Piper TTS Stream
+        if tts_voice:
+            # Piper outputs 16kHz raw PCM by default, we need 8kHz for AudioSocket
+            # We will use simple decimation (drop every other sample) for 16k -> 8k
+            # This is a naive downsample for performance.
+            audio_stream = tts_voice.synthesize_stream_raw(response_text)
+            for raw_chunk in audio_stream:
+                # raw_chunk is 16-bit 16kHz PCM bytes
+                # Convert to numpy, downsample to 8kHz, convert back to bytes
+                np_chunk = np.frombuffer(raw_chunk, dtype=np.int16)
+                np_8k = np_chunk[::2]
+                chunk_8k = np_8k.tobytes()
+                
+                # Send to AudioSocket in chunks of 320 bytes (20ms)
+                for i in range(0, len(chunk_8k), 320):
+                    sub_chunk = chunk_8k[i:i+320]
+                    if len(sub_chunk) == 320:
+                        out_header = bytes([16]) + len(sub_chunk).to_bytes(2, byteorder='big')
+                        writer.write(out_header + sub_chunk)
+                        await writer.drain()
+        else:
+            # Fallback Dummy PCM
+            dummy_pcm = b"\x00\x00" * 8000 # 1 second of silence
+            chunk_size = 320 # 20ms at 8000Hz 16-bit
+            for i in range(0, len(dummy_pcm), chunk_size):
+                chunk = dummy_pcm[i:i+chunk_size]
+                out_header = bytes([16]) + len(chunk).to_bytes(2, byteorder='big')
+                writer.write(out_header + chunk)
+                await writer.drain()
 
 class AudioSocketServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 4000):
         self.host = host
         self.port = port
         self.sessions: Dict[str, AudioSession] = {}
+        log.info("Loading ASR model...")
+        self.asr_model = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+        
+        self.tts_voice = None
+        model_path = os.path.join(os.path.dirname(__file__), "en_US-lessac-medium.onnx")
+        if HAS_PIPER and os.path.exists(model_path):
+            log.info("Loading TTS model...")
+            self.tts_voice = PiperVoice.load(model_path)
+        else:
+            log.warning("Piper TTS model not found or piper not installed. Using dummy audio fallback.")
 
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info('peername')
         log.info(f"New AudioSocket connection from {addr}")
 
         try:
-            # FreeSWITCH AudioSocket sends a UUID/CallID in the first few bytes or as a header
-            # For simplicity, we'll assume a fixed header for now or generate one
-            call_id = f"call_{addr[1]}"
-            session = AudioSession(call_id)
+            # First read header
+            header = await reader.readexactly(3)
+            msg_type = header[0]
+            payload_len = int.from_bytes(header[1:3], byteorder='big')
+            payload = await reader.readexactly(payload_len)
+            
+            call_id = payload.hex() if msg_type == 1 else f"call_{addr[1]}"
+            session = AudioSession(call_id, self.asr_model, self.tts_voice)
             self.sessions[call_id] = session
 
             while True:
-                data = await reader.read(320)  # 20ms of 8kHz mono PCM is 160 samples * 2 bytes = 320 bytes
-                if not data:
-                    break
+                header = await reader.readexactly(3)
+                msg_type = header[0]
+                payload_len = int.from_bytes(header[1:3], byteorder='big')
                 
-                await session.process_frame(data)
+                if payload_len > 0:
+                    payload = await reader.readexactly(payload_len)
+                else:
+                    payload = b""
+                    
+                if msg_type == 16:  # Audio Payload
+                    await session.process_frame(payload, writer)
+                elif msg_type == 2 or msg_type == 3:  # Error or Hangup
+                    log.info(f"[{call_id}] Connection ended")
+                    break
 
+        except asyncio.IncompleteReadError:
+            log.info(f"AudioSocket connection closed by peer {addr}")
         except Exception as e:
-            log.error(f"Error in AudioSocket session: {e}")
+            log.error(f"Error in AudioSocket session: {e}", exc_info=True)
         finally:
-            log.info(f"Closing AudioSocket connection from {addr}")
+            log.info(f"Cleaning up AudioSocket connection from {addr}")
             writer.close()
             await writer.wait_closed()
 
@@ -58,6 +164,10 @@ class AudioSocketServer:
             await server.serve_forever()
 
 async def start_audio_server():
+    if not settings.enable_audio_server:
+        log.info("Audio server disabled via config.")
+        return
+        
     server = AudioSocketServer(
         host=settings.freeswitch_audiosocket_host,
         port=settings.freeswitch_audiosocket_port

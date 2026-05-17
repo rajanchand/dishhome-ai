@@ -1,0 +1,9 @@
+<include>
+  <extension name="dishhome_ai">
+    <condition field="destination_number" expression="^(16600122000)$">
+      <action application="answer"/>
+      <!-- AudioSocket expects IP:Port, 4000 is our backend -->
+      <action application="audiosocket" data="127.0.0.1:4000"/>
+    </condition>
+  </extension>
+</include>
