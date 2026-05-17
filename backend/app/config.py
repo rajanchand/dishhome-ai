@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     freeswitch_audiosocket_host: str = "0.0.0.0"
     freeswitch_audiosocket_port: int = 4000
-    enable_audio_server: bool = True
+    enable_audio_server: bool = False
 
     redis_host: str = "localhost"
     redis_port: int = 6379
