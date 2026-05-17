@@ -8,7 +8,9 @@ import {
 import { AuthProvider, useAuth } from "./lib/auth";
 import Layout from "./components/Layout";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { ThemeProvider } from "./components/ThemeProvider";
 import { NetworkStatusBridge, ToastProvider } from "./components/Toast";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Calls from "./pages/Calls";
@@ -40,11 +42,15 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
+const queryClient = new QueryClient();
+
 export default function App() {
   return (
-    <ErrorBoundary>
-      <ToastProvider>
-        <NetworkStatusBridge />
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider defaultTheme="light">
+      <ErrorBoundary>
+        <ToastProvider>
+          <NetworkStatusBridge />
         <AuthProvider>
           <BrowserRouter>
             <Routes>
@@ -76,7 +82,9 @@ export default function App() {
             </Routes>
           </BrowserRouter>
         </AuthProvider>
-      </ToastProvider>
-    </ErrorBoundary>
+        </ToastProvider>
+      </ErrorBoundary>
+    </ThemeProvider>
+    </QueryClientProvider>
   );
 }

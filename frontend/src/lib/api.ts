@@ -1,5 +1,5 @@
 // ==================== API Base URL ====================
-const BASE: string = (() => {
+export const BASE: string = (() => {
   const env = import.meta.env.VITE_API_BASE;
   // Trust the env var only when it looks like a real URL / path
   if (env && (env.startsWith("/") || env.startsWith("http"))) return env as string;

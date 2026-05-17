@@ -17,6 +17,7 @@ import {
 } from "../components/ui";
 import { Skeleton } from "../components/Skeleton";
 import { useAsyncErrorToast, useToast } from "../components/Toast";
+import { Play } from "lucide-react";
 
 export default function CampaignDetail() {
   const { id } = useParams<{ id: string }>();
@@ -180,7 +181,7 @@ export default function CampaignDetail() {
                 </p>
               ) : (
                 <Button onClick={run} className="w-full">
-                  ▶ Run campaign
+                  <Play size={16} /> Run campaign
                 </Button>
               )}
               <Button
@@ -302,7 +303,7 @@ function DemoCallCard({ campaign }: { campaign: Campaign }) {
           className="flex-1"
         />
         <Button onClick={call} disabled={busy || !mobile.trim()}>
-          {busy ? "Dialing…" : "▶ Demo call"}
+          {busy ? "Dialing…" : <><Play size={16} /> Demo call</>}
         </Button>
       </div>
       {mode === "mock" && hint && (

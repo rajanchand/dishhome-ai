@@ -8,6 +8,7 @@ import {
 import { Badge, Button, Card, Input, PageBody, PageHeader } from "../components/ui";
 import { Skeleton } from "../components/Skeleton";
 import { useAsyncErrorToast, useToast } from "../components/Toast";
+import { Play, Square, Music } from "lucide-react";
 
 const PRESETS = [
   {
@@ -246,11 +247,11 @@ export default function VoiceLab() {
             <div className="mt-4 flex items-center gap-3 flex-wrap">
               {playing ? (
                 <Button variant="danger" onClick={stop}>
-                  ■ Stop
+                  <Square size={16} className="mr-1" /> Stop
                 </Button>
               ) : (
                 <Button onClick={play} disabled={!text.trim() || !currentVoice}>
-                  ▶ Play sample
+                  <Play size={16} className="mr-1" /> Play sample
                 </Button>
               )}
               {currentVoice?.source === "uploaded" && (
@@ -411,7 +412,9 @@ function UploadCard({ onUploaded }: { onUploaded: () => void }) {
             : "border-black/10 hover:border-dishhome-blue/40 hover:bg-dishhome-blue/5"
         }`}
       >
-        <div className="text-2xl">♪</div>
+        <div className="flex justify-center text-dishhome-ink/40 mb-2">
+          <Music size={32} />
+        </div>
         {file ? (
           <div className="mt-1 text-sm font-medium text-dishhome-blue">
             {file.name}

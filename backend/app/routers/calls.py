@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
+import asyncio
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -181,3 +182,38 @@ async def audio_bridge(websocket: WebSocket, session_id: str) -> None:
             await websocket.send_bytes(chunk)
     except WebSocketDisconnect:
         return
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except WebSocketDisconnect:
+                self.disconnect(connection)
+
+live_manager = ConnectionManager()
+
+@router.websocket("/live")
+async def live_dashboard(websocket: WebSocket, token: str = Query(None)):
+    from app.security import decode_access_token
+    if not token or not decode_access_token(token):
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+        
+    await live_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        live_manager.disconnect(websocket)

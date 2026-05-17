@@ -11,6 +11,8 @@ import secrets
 import time
 from collections import deque
 from threading import Lock
+import jwt
+from datetime import datetime, timedelta, timezone
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHash, VerifyMismatchError
@@ -65,6 +67,26 @@ def is_hashed(value: str) -> bool:
 # and managed via routers/admin.py. In-memory sessions have been removed.
 
 SESSION_TTL_SECONDS = 86400  # 24 hours
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    from app.config import settings
+    to_encode = data.copy()
+    now = datetime.now(timezone.utc)
+    if expires_delta:
+        expire = now + expires_delta
+    else:
+        expire = now + timedelta(minutes=15)
+    to_encode.update({"exp": expire, "iat": now})
+    secret = settings.app_secret_key or "dev_secret_key_1234567890"
+    return jwt.encode(to_encode, secret, algorithm="HS256")
+
+def decode_access_token(token: str) -> dict | None:
+    from app.config import settings
+    secret = settings.app_secret_key or "dev_secret_key_1234567890"
+    try:
+        return jwt.decode(token, secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
 
 # ----- Login rate limiter -----
 

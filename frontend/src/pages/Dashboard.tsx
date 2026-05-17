@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   api,
+  BASE,
   type CallStats,
   type CallSummary,
   type MetricsSnapshot,
 } from "../lib/api";
+import { useQuery } from "@tanstack/react-query";
 import {
   Badge,
   Card,
@@ -15,37 +17,46 @@ import {
   statusTone,
 } from "../components/ui";
 import { SkeletonStat, SkeletonRows, Skeleton } from "../components/Skeleton";
-import { useAsyncErrorToast } from "../components/Toast";
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<CallStats | null>(null);
-  const [calls, setCalls] = useState<CallSummary[] | null>(null);
-  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-  const errToast = useAsyncErrorToast();
+
+  const { data: stats } = useQuery({
+    queryKey: ["calls", "stats"],
+    queryFn: () => api.get<CallStats>("/calls/stats"),
+  });
+
+  const { data: calls } = useQuery({
+    queryKey: ["calls"],
+    queryFn: () => api.get<CallSummary[]>("/calls"),
+  });
+
+  const { data: metrics } = useQuery({
+    queryKey: ["metrics"],
+    queryFn: () => api.get<MetricsSnapshot>("/metrics"),
+    refetchInterval: 5000,
+  });
+
+  const [liveTranscripts, setLiveTranscripts] = useState<any[]>([]);
 
   useEffect(() => {
-    let stopped = false;
-    const stop = (e: unknown) => {
-      // If it's a 401, don't show toast — the global handler redirects
-      if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) return;
-      errToast(e);
-    };
-    api.get<CallStats>("/calls/stats").then(setStats).catch(stop);
-    api.get<CallSummary[]>("/calls").then(setCalls).catch(stop);
+    const token = localStorage.getItem("dh_token");
+    if (!token) return;
 
-    const loadMetrics = () => {
-      if (stopped) return;
-      api.get<MetricsSnapshot>("/metrics").then(setMetrics).catch((e) => {
-        // Stop polling on auth failure
-        if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 401) {
-          stopped = true;
-        }
-      });
+    const wsUrl = BASE.replace(/^http/, "ws") + `/calls/live?token=${token}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        setLiveTranscripts((prev) => [data, ...prev].slice(0, 50));
+      } catch (e) {
+        console.error("Failed to parse websocket message", e);
+      }
     };
-    loadMetrics();
-    const i = window.setInterval(loadMetrics, 5000);
-    return () => { stopped = true; window.clearInterval(i); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    return () => {
+      ws.close();
+    };
   }, []);
 
   const recent = calls
@@ -82,11 +93,11 @@ export default function Dashboard() {
                 hint="Dispatched to field teams"
                 accent="blue"
               />
-              <StatCard
+              <RingStatCard
                 label="AI Resolution Rate"
                 value={`${Math.round(stats.ai_resolution_rate * 100)}%`}
+                percentage={Math.round(stats.ai_resolution_rate * 100)}
                 hint={`Avg handle: ${stats.avg_handle_sec}s`}
-                accent="blue"
               />
             </>
           ) : (
@@ -144,39 +155,30 @@ export default function Dashboard() {
 
           <Card title="Live Intelligence Feed">
             <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin">
-              <div className="flex items-start gap-3 p-3 bg-dishhome-blue/5 rounded-xl border border-dishhome-blue/10 animate-in fade-in slide-in-from-right-4">
-                <div className="w-2 h-2 mt-1.5 rounded-full bg-dishhome-blue animate-pulse shrink-0" />
-                <div>
-                  <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 mb-1">9841****** · Now</div>
-                  <p className="text-xs text-dishhome-ink italic">"नमस्ते, मेरो राउटरमा रातो बत्ती बलिरहेको छ..."</p>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <Badge tone="info">RED_LIGHT_ISSUE</Badge>
-                    <span className="text-[10px] text-emerald-600 font-medium">92% Match</span>
+              {liveTranscripts.length > 0 ? (
+                liveTranscripts.map((t, idx) => (
+                  <div key={idx} className={`flex items-start gap-3 p-3 rounded-xl border animate-in fade-in slide-in-from-right-4 ${
+                    idx === 0 ? "bg-dishhome-blue/5 border-dishhome-blue/10" : "bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 opacity-80"
+                  }`}>
+                    <div className={`w-2 h-2 mt-1.5 rounded-full shrink-0 ${idx === 0 ? "bg-dishhome-blue animate-pulse" : "bg-dishhome-ink/20 dark:bg-dishhome-mist/20"}`} />
+                    <div>
+                      <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 dark:text-dishhome-mist/40 mb-1">
+                        {t.caller_number} · Now
+                      </div>
+                      <p className="text-xs text-dishhome-ink dark:text-dishhome-mist italic">"{t.text}"</p>
+                      {t.intent && (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          <Badge tone="info">{t.intent}</Badge>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="text-sm text-dishhome-ink/50 dark:text-dishhome-mist/50 italic py-4">
+                  Waiting for live calls...
                 </div>
-              </div>
-
-              <div className="flex items-start gap-3 p-3 bg-black/5 rounded-xl border border-black/5 opacity-80">
-                <div className="w-2 h-2 mt-1.5 rounded-full bg-dishhome-ink/20 shrink-0" />
-                <div>
-                  <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 mb-1">9802****** · 2m ago</div>
-                  <p className="text-xs text-dishhome-ink">"When is the technician coming to check my ONT?"</p>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <Badge tone="warn">FIELD_DISPATCH</Badge>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3 p-3 bg-black/5 rounded-xl border border-black/5 opacity-60">
-                <div className="w-2 h-2 mt-1.5 rounded-full bg-dishhome-ink/20 shrink-0" />
-                <div>
-                  <div className="text-[10px] uppercase tracking-widest text-dishhome-ink/40 mb-1">9818****** · 5m ago</div>
-                  <p className="text-xs text-dishhome-ink">"I want to renew my annual subscription package."</p>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <Badge tone="success">RENEWAL_QUERY</Badge>
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
             <button className="w-full mt-4 text-[10px] uppercase tracking-widest text-dishhome-blue font-bold hover:underline">
               View All Transcripts →
@@ -267,6 +269,34 @@ function Metric({
         {label}
       </div>
       <div className={`mt-1 text-xl font-bold ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function RingStatCard({ label, value, percentage, hint }: { label: string, value: string, percentage: number, hint: string }) {
+  const radius = 28;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <div className="rounded-2xl bg-white dark:bg-dishhome-ink/50 border border-black/5 dark:border-white/5 shadow-sm p-5 transition-all hover:-translate-y-1 hover:shadow-md group">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-dishhome-ink/50 dark:text-dishhome-mist/50">
+            {label}
+          </div>
+          <div className="mt-2 text-3xl font-bold text-dishhome-blue dark:text-blue-400">{value}</div>
+        </div>
+        <div className="relative w-16 h-16 shrink-0">
+          <svg className="w-full h-full -rotate-90" viewBox="0 0 64 64">
+            <circle className="text-black/5 dark:text-white/10 stroke-current" strokeWidth="6" cx="32" cy="32" r={radius} fill="transparent"></circle>
+            <circle className="text-dishhome-blue dark:text-blue-400 stroke-current transition-all duration-1000 ease-out" strokeWidth="6" strokeLinecap="round" cx="32" cy="32" r={radius} fill="transparent" strokeDasharray={circumference} strokeDashoffset={strokeDashoffset}></circle>
+          </svg>
+        </div>
+      </div>
+      <div className="mt-1 text-xs text-dishhome-ink/60 dark:text-dishhome-mist/60 group-hover:text-dishhome-ink/80 dark:group-hover:text-dishhome-mist/80 transition-colors">
+        {hint}
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+import sentry_sdk
 from collections import deque
 from contextvars import ContextVar
 from typing import Awaitable, Callable
@@ -23,6 +24,13 @@ class RequestIdLogFilter(logging.Filter):
 
 def configure_logging() -> None:
     from app.config import settings
+
+    if settings.sentry_dsn:
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.app_env,
+            traces_sample_rate=1.0,
+        )
 
     handler = logging.StreamHandler()
     handler.setFormatter(

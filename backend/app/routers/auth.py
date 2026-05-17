@@ -19,7 +19,9 @@ from app.security import (
     record_login_failure,
     verify_password,
     SESSION_TTL_SECONDS,
-    DUMMY_HASH
+    DUMMY_HASH,
+    create_access_token,
+    decode_access_token,
 )
 import time
 
@@ -125,8 +127,8 @@ async def login(
 
     clear_login_failures(ip, uname_raw)
     
-    # Generate persistent session
-    token = secrets.token_urlsafe(32)
+    # Generate persistent session (JWT)
+    token = create_access_token({"sub": user.username}, expires_delta=timedelta(seconds=SESSION_TTL_SECONDS))
     now = time.time()
     new_sess = UserSession(
         token=token,
