@@ -4,63 +4,50 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-dishhome_ai}
       POSTGRES_USER: ${POSTGRES_USER:-dishhome}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dishhome_secret}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dishhome} -d ${POSTGRES_DB:-dishhome_ai}"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 10
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 10
-    restart: unless-stopped
-
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    profiles: ["ai", "gpu"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  freeswitch_mock:
-    image: alpine/socat
-    command: TCP-LISTEN:${FREESWITCH_AUDIOSOCKET_PORT:-4000},fork,reuseaddr EXEC:"/bin/cat"
-    ports:
-      - "4002:${FREESWITCH_AUDIOSOCKET_PORT:-4000}"
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      target: ${BACKEND_BUILD_TARGET:-development}
-    env_file: .env
+      target: production
     environment:
-      - POSTGRES_HOST=postgres
-      - REDIS_HOST=redis
-      - OLLAMA_HOST=http://ollama:11434
+      APP_ENV: production
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set CORS_ALLOWED_ORIGINS}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      OLLAMA_HOST: ${OLLAMA_HOST:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_multilingual_v2}
+      ENABLE_AUDIO_SERVER: ${ENABLE_AUDIO_SERVER:-true}
+      TWILIO_VALIDATE_SIGNATURES: "true"
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -68,8 +55,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/ready"]
       interval: 30s
@@ -82,22 +67,22 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: ${FRONTEND_BUILD_TARGET:-development}
+      target: production
       args:
-        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:${APP_PORT:-8000}}
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
-    environment:
-      - VITE_API_BASE=http://localhost:${APP_PORT:-8000}
+      - "${FRONTEND_PORT:-80}:80"
     depends_on:
       backend:
         condition: service_healthy
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
-  ollama_data:

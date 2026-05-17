@@ -14,6 +14,7 @@ Web Speech API.
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ from app.mock_data import VOICES
 from app.routers.auth import UserOut, current_user, require_permission
 
 router = APIRouter(prefix="/voice", tags=["voice"])
+log = logging.getLogger("dishhome.voice")
 
 # Detect if running on Vercel (read-only filesystem except for /tmp)
 IS_VERCEL = os.environ.get("VERCEL") == "1" or os.environ.get("VERCEL_ENV") is not None
@@ -520,4 +522,4 @@ async def delete_voice(
         try:
             await delete_remote_voice(remote_id)
         except Exception as e:
-            print(f"[voice] remote ElevenLabs delete failed for {remote_id}: {e}")
+            log.warning("Remote ElevenLabs delete failed for %s: %s", remote_id, e)

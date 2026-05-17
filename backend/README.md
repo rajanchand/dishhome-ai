@@ -20,6 +20,13 @@ Hit `http://localhost:8000/health` — expect `{"status":"ok"}`.
 
 OpenAPI docs at `http://localhost:8000/docs`.
 
+Production readiness checks:
+
+```sh
+curl http://localhost:8000/health/live
+curl http://localhost:8000/health/ready
+```
+
 ## Layout
 
 ```

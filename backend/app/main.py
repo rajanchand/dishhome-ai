@@ -26,16 +26,18 @@ from app.audio_server import start_audio_server
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.validate_for_runtime()
     await connect_db()
-    # Start AudioSocket server in the background
-    audio_task = asyncio.create_task(start_audio_server())
+    audio_task: asyncio.Task | None = None
+    if settings.enable_audio_server:
+        audio_task = asyncio.create_task(start_audio_server())
     yield
-    # Cleanup
-    audio_task.cancel()
-    try:
-        await audio_task
-    except asyncio.CancelledError:
-        pass
+    if audio_task:
+        audio_task.cancel()
+        try:
+            await audio_task
+        except asyncio.CancelledError:
+            pass
     await disconnect_db()
 
 app = FastAPI(

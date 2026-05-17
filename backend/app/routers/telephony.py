@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from app.routers.auth import UserOut, current_user, require_permission
 E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
 router = APIRouter(prefix="/telephony", tags=["telephony"])
+log = logging.getLogger("dishhome.telephony")
 
 
 class OriginateRequest(BaseModel):
@@ -150,7 +152,7 @@ async def originate(
             audio_url = f"{base}/voice/tts/public?{qs}"
         except Exception as e:  # pragma: no cover - graceful fallback
             audio_url = None
-            print(f"[telephony] pre-synth failed, falling back to <Say>: {e}")
+            log.warning("Pre-synthesis failed, falling back to Twilio Say: %s", e)
 
     twiml_url = f"{base}/telephony/twiml/{session_id}"
     status_cb = f"{base}/telephony/status/{session_id}"
@@ -364,5 +366,4 @@ def _xml_escape(s: str) -> str:
         .replace('"', "&quot;")
         .replace("'", "&apos;")
     )
-
 

@@ -1,5 +1,5 @@
 # ---- Base Layer ----
-FROM python:3.12-slim AS base
+FROM python:3.13-slim AS base
 
 WORKDIR /app
 
@@ -19,7 +19,8 @@ RUN pip install --upgrade pip && \
 
 # ---- Development Target ----
 FROM base AS development
-# Install dev tools if necessary, or just run with reload
+COPY . .
+EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # ---- Production Target ----
@@ -33,6 +34,8 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health/ready || exit 1
 
 # Use the start script to handle migrations
 ENTRYPOINT ["./scripts/start.sh"]

@@ -22,6 +22,8 @@ class RequestIdLogFilter(logging.Filter):
 
 
 def configure_logging() -> None:
+    from app.config import settings
+
     handler = logging.StreamHandler()
     handler.setFormatter(
         logging.Formatter(
@@ -31,7 +33,7 @@ def configure_logging() -> None:
     handler.addFilter(RequestIdLogFilter())
     root = logging.getLogger()
     root.handlers = [handler]
-    root.setLevel(logging.INFO)
+    root.setLevel(getattr(logging, settings.app_log_level.upper(), logging.INFO))
 
 
 # ---------------- Metrics (in-memory ring buffer) ----------------

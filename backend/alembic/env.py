@@ -1,4 +1,5 @@
 import asyncio
+import urllib.parse
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -22,9 +23,21 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
+
+def _async_database_url() -> str:
+    raw = settings.effective_database_url
+    if not raw:
+        raise RuntimeError("DATABASE_URL or POSTGRES_* settings are required for migrations")
+    url = raw.replace("postgresql://", "postgresql+asyncpg://")
+    parsed = urllib.parse.urlparse(url)
+    query_params = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    query_params.pop("pgbouncer", None)
+    query_params.setdefault("prepared_statement_cache_size", "0")
+    return parsed._replace(query=urllib.parse.urlencode(query_params)).geturl()
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+    url = _async_database_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -43,7 +56,7 @@ def do_run_migrations(connection) -> None:
 
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+    url = _async_database_url()
     
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = url

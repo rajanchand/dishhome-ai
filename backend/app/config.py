@@ -1,4 +1,9 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from urllib.parse import quote_plus
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required deployment configuration is missing or unsafe."""
 
 
 class Settings(BaseSettings):
@@ -20,8 +25,6 @@ class Settings(BaseSettings):
     # SECURITY: Pin to exact deployment domains. Never use wildcards in production.
     cors_allowed_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://212.227.39.216:5173,"
         "https://dishhome-ai-8hxd.vercel.app"
     )
 
@@ -30,6 +33,7 @@ class Settings(BaseSettings):
 
     freeswitch_audiosocket_host: str = "0.0.0.0"
     freeswitch_audiosocket_port: int = 4000
+    enable_audio_server: bool = True
 
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -68,7 +72,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
-    supabase_schema: str = "public"
+    supabase_schema: str = "dh"
     
     # Postgres Direct & Pooling URLs
     database_url: str = ""
@@ -77,6 +81,17 @@ class Settings(BaseSettings):
     @property
     def supabase_enabled(self) -> bool:
         return bool(self.supabase_url and self.supabase_service_role_key)
+
+    @property
+    def effective_database_url(self) -> str:
+        if self.database_url:
+            return self.database_url
+        if not (self.postgres_host and self.postgres_db and self.postgres_user and self.postgres_password):
+            return ""
+        user = quote_plus(self.postgres_user)
+        password = quote_plus(self.postgres_password)
+        host = self.postgres_host
+        return f"postgresql://{user}:{password}@{host}:{self.postgres_port}/{self.postgres_db}"
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -97,6 +112,40 @@ class Settings(BaseSettings):
             ("en", "female"): self.elevenlabs_voice_en_female,
             ("en", "male"): self.elevenlabs_voice_en_male,
         }.get((language, gender), "")
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.lower() == "production"
+
+    def validate_for_runtime(self) -> None:
+        """Fail fast on unsafe production settings.
+
+        Development should stay easy to run, but production should never boot
+        with placeholder secrets, missing persistence, or loose callback auth.
+        """
+        if not self.is_production:
+            return
+
+        errors: list[str] = []
+        if len(self.app_secret_key.strip()) < 32:
+            errors.append("APP_SECRET_KEY must be set to at least 32 characters")
+        if not self.public_base_url.startswith("https://"):
+            errors.append("PUBLIC_BASE_URL must be an https URL in production")
+        if not self.effective_database_url:
+            errors.append("DATABASE_URL or POSTGRES_* settings must be set in production")
+        if not self.twilio_validate_signatures:
+            errors.append("TWILIO_VALIDATE_SIGNATURES must remain true in production")
+        origins = self.cors_origins_list
+        if not origins:
+            errors.append("CORS_ALLOWED_ORIGINS must include the deployed frontend origin")
+        for origin in origins:
+            if "*" in origin:
+                errors.append("CORS_ALLOWED_ORIGINS must not contain wildcards")
+            if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1"):
+                errors.append("CORS_ALLOWED_ORIGINS must not contain localhost in production")
+
+        if errors:
+            raise ConfigurationError("; ".join(errors))
 
 
 settings = Settings()

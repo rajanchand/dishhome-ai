@@ -70,6 +70,7 @@ docker compose up --build
 - Deploy: Docker, Kubernetes
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and [docs/telephony-architecture.md](docs/telephony-architecture.md) for the real-time integration.
+See [docs/PRODUCTION.md](docs/PRODUCTION.md) for the deployment runbook and production gates.
 
 ## License
 

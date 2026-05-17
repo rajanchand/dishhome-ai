@@ -13,7 +13,7 @@ add to `backend/.env` (gitignored):
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_ANON_KEY=<eyJ…>          # public, browser-safe
 SUPABASE_SERVICE_ROLE_KEY=<eyJ…>  # secret — server-side only, bypasses RLS
-SUPABASE_SCHEMA=public            # or your own namespace (e.g. "dh")
+SUPABASE_SCHEMA=dh
 ```
 
 Restart the backend.
@@ -54,7 +54,7 @@ Expected response:
   "enabled": true,
   "reachable": true,
   "url": "https://<project>.supabase.co",
-  "schema": "public",
+  "schema": "dh",
   "tables": { "users": true, "sessions": true, "login_events": true, "audit_log": true },
   "migration_applied": true
 }

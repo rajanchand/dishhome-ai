@@ -30,3 +30,13 @@ src/
 - Add real-time call transcript updates over WebSocket.
 - Add i18n for Nepali/English UI strings.
 - Add automated browser smoke tests for the protected routes.
+
+## Production build
+
+The production Docker target builds static assets and serves them with nginx:
+
+```sh
+docker build --target production --build-arg VITE_API_BASE=https://api.example.com -t dishhome-ai-frontend .
+```
+
+Set `VITE_API_BASE` at build time to the public backend origin.

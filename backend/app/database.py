@@ -16,14 +16,15 @@ async_session_maker: async_sessionmaker[AsyncSession] | None = None
 async def connect_db():
     """Initialize the SQLAlchemy async engine and session factory."""
     global engine, async_session_maker
-    if not settings.database_url:
+    database_url = settings.effective_database_url
+    if not database_url:
         log.warning("No DATABASE_URL provided. Database will not be connected.")
         return
 
     try:
-        log.info("Connecting to Supabase Postgres (SQLAlchemy 2.0)...")
+        log.info("Connecting to Postgres (SQLAlchemy 2.0)...")
         # Ensure the URL uses asyncpg.
-        url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+        url = database_url.replace("postgresql://", "postgresql+asyncpg://")
 
         parsed = urllib.parse.urlparse(url)
         query_params = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
