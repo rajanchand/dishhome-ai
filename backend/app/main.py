@@ -22,14 +22,13 @@ from app.routers import (
 from contextlib import asynccontextmanager
 import asyncio
 from app.database import connect_db, disconnect_db
-from app.audio_server import start_audio_server
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_for_runtime()
     await connect_db()
     audio_task: asyncio.Task | None = None
     if settings.enable_audio_server:
+        from app.audio_server import start_audio_server
         audio_task = asyncio.create_task(start_audio_server())
     yield
     if audio_task:
