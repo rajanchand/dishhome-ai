@@ -67,7 +67,10 @@ async def disconnect_db():
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Dependency injection for FastAPI routes to get a database session."""
     if async_session_maker is None:
-        raise RuntimeError("Database not initialized. Call connect_db() during lifespan.")
+        # Lazy initialization for serverless environments (Vercel)
+        await connect_db()
+        if async_session_maker is None:
+            raise RuntimeError("Database not initialized. Call connect_db() during lifespan.")
     
     async with async_session_maker() as session:
         try:
