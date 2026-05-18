@@ -177,7 +177,7 @@ export function Softphone() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 bg-dishhome-orange hover:bg-orange-600 text-white p-4 rounded-full shadow-lg transition-transform hover:scale-105 z-50 flex items-center justify-center"
+        className="fixed bottom-6 left-6 bg-dishhome-orange hover:bg-orange-600 text-white p-4 rounded-full shadow-lg transition-transform hover:scale-105 z-50 flex items-center justify-center"
         aria-label="Open softphone"
       >
         <Phone size={24} />
@@ -186,7 +186,7 @@ export function Softphone() {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 w-80 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
+    <div className="fixed bottom-6 left-6 w-80 bg-white border border-gray-200 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
       <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
         <div>
           <h3 className="font-semibold text-sm">DishHome Softphone</h3>
