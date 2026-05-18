@@ -89,16 +89,30 @@ class AgentState(TypedDict):
     call_id: str
 
 async def process_llm(state: AgentState):
-    from app.config import settings
-    # Ensure Ollama is running. For fallback, we could catch connection errors.
+    # Resolve Ollama config through the runtime-config layer so a
+    # super_admin can repoint the agent to a different host/model from the
+    # Settings UI without a redeploy.
+    from app.database import async_session_maker
+    from app.services.runtime_config import get_effective
+    from app.config import settings as _settings
+
+    model = _settings.ollama_model
+    host = _settings.ollama_host
+    if async_session_maker is not None:
+        try:
+            async with async_session_maker() as db:
+                model = await get_effective(db, "ollama_model") or model
+                host = await get_effective(db, "ollama_host") or host
+        except Exception as e:
+            logger.warning("runtime_config lookup failed, using env defaults: %s", e)
+
     try:
-        llm = ChatOllama(model=settings.ollama_model, base_url=settings.ollama_host)
+        llm = ChatOllama(model=model, base_url=host)
         llm_with_tools = llm.bind_tools(tools)
         response = await llm_with_tools.ainvoke(state["messages"])
         return {"messages": [response]}
     except Exception as e:
         logger.error(f"LLM Error: {e}")
-        # Fallback response if Ollama is not running locally
         from langchain_core.messages import AIMessage
         return {"messages": [AIMessage(content="I'm sorry, my cognitive systems are currently offline. Please try again later.")]}
 

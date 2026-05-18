@@ -120,6 +120,7 @@ export const api = {
   get: <T>(p: string, signal?: AbortSignal) => request<T>("GET", p, { signal }),
   post: <T>(p: string, body?: unknown, signal?: AbortSignal) =>
     request<T>("POST", p, { body, signal }),
+  put: <T>(p: string, body?: unknown) => request<T>("PUT", p, { body }),
   patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, { body }),
   delete: <T>(p: string) => request<T>("DELETE", p),
   upload: <T>(p: string, formData: FormData, signal?: AbortSignal) =>

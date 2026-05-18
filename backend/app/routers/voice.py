@@ -28,7 +28,12 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.elevenlabs_client import ElevenLabsError, clone_voice, synthesize
+from app.elevenlabs_client import (
+    ElevenLabsError,
+    clone_voice,
+    elevenlabs_enabled,
+    synthesize,
+)
 from app.mock_data import VOICES
 from app.routers.auth import UserOut, current_user, require_permission
 
@@ -257,7 +262,7 @@ def list_voices(_: Annotated[UserOut, Depends(require_permission("voice.read"))]
 def voice_health(_: Annotated[UserOut, Depends(current_user)]) -> dict:
     d = _load_defaults()
     return {
-        "elevenlabs_enabled": settings.elevenlabs_enabled,
+        "elevenlabs_enabled": elevenlabs_enabled(),
         "model_id": settings.elevenlabs_model_id,
         "primary_voice_id": d.get("primary_voice_id"),
         "defaults_by_lang_gender": d.get("defaults_by_lang_gender", {}),
@@ -357,7 +362,7 @@ async def preview(
     eleven_id = voice.get("elevenlabs_voice_id")
     audio_url: str | None = None
     engine: Literal["elevenlabs", "browser-tts"] = "browser-tts"
-    if settings.elevenlabs_enabled and eleven_id:
+    if elevenlabs_enabled() and eleven_id:
         try:
             await synthesize_to_cache(eleven_id, payload.text)
             audio_url = f"/voice/tts?voice_id={voice['id']}&text={payload.text}"
@@ -389,7 +394,7 @@ async def tts(
     if not voice:
         raise HTTPException(404, "Voice not found")
     eleven_id = voice.get("elevenlabs_voice_id")
-    if not (settings.elevenlabs_enabled and eleven_id):
+    if not (elevenlabs_enabled() and eleven_id):
         raise HTTPException(
             503,
             "ElevenLabs not configured for this voice. Set ELEVENLABS_API_KEY and a voice mapping.",
@@ -422,7 +427,7 @@ async def tts_public(voice_id: str, text: str, token: str = "") -> Response:
     if not voice:
         raise HTTPException(404, "Voice not found")
     eleven_id = voice.get("elevenlabs_voice_id")
-    if not (settings.elevenlabs_enabled and eleven_id):
+    if not (elevenlabs_enabled() and eleven_id):
         raise HTTPException(503, "ElevenLabs not configured for this voice")
     try:
         path = await synthesize_to_cache(eleven_id, text)
@@ -465,7 +470,7 @@ async def upload_voice(
             raw_chunks.append(chunk)
 
     elevenlabs_voice_id: str | None = None
-    if clone and settings.elevenlabs_enabled:
+    if clone and elevenlabs_enabled():
         try:
             elevenlabs_voice_id = await clone_voice(
                 name=name.strip(),
@@ -549,7 +554,7 @@ async def delete_voice(
     # storage / credit on their side. Don't fail the local delete if remote
     # cleanup fails.
     remote_id = target.get("elevenlabs_voice_id")
-    if remote_id and settings.elevenlabs_enabled:
+    if remote_id and elevenlabs_enabled():
         from app.elevenlabs_client import delete_remote_voice
         try:
             await delete_remote_voice(remote_id)

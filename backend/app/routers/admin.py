@@ -168,6 +168,95 @@ def system_config(_: Annotated[UserOut, Depends(current_user)]) -> SystemConfig:
     )
 
 
+# ── Runtime config: editable overrides (super_admin only to write) ──
+class RuntimeConfigEntry(BaseModel):
+    key: str
+    label: str
+    is_secret: bool
+    source: Literal["db", "env", "unset"]
+    value: str  # masked for secrets; empty for unset
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class RuntimeConfigUpdate(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    value: str = Field(max_length=4096)  # empty string clears the override
+
+
+class RuntimeConfigUpdateRequest(BaseModel):
+    updates: list[RuntimeConfigUpdate]
+
+
+async def _build_runtime_config(db: AsyncSession) -> list[RuntimeConfigEntry]:
+    """Shared builder used by both list + update endpoints."""
+    from app.services.runtime_config import SUPPORTED_KEYS, mask
+    from app.models.system_config import SystemConfigEntry
+
+    result = await db.execute(select(SystemConfigEntry))
+    by_key = {r.key: r for r in result.scalars().all()}
+
+    entries: list[RuntimeConfigEntry] = []
+    for key, spec in SUPPORTED_KEYS.items():
+        row = by_key.get(key)
+        db_value = row.value if row else ""
+        env_value = str(getattr(settings, key, "") or "")
+        if db_value:
+            source: Literal["db", "env", "unset"] = "db"
+            effective = db_value
+        elif env_value:
+            source = "env"
+            effective = env_value
+        else:
+            source = "unset"
+            effective = ""
+        entries.append(
+            RuntimeConfigEntry(
+                key=key,
+                label=spec.label,
+                is_secret=spec.is_secret,
+                source=source,
+                value=mask(effective, spec.is_secret),
+                updated_at=row.updated_at.isoformat() if row and row.updated_at else None,
+                updated_by=row.updated_by if row else None,
+            )
+        )
+    return entries
+
+
+@router.get("/runtime-config", response_model=list[RuntimeConfigEntry])
+async def list_runtime_config(
+    _: Annotated[UserOut, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[RuntimeConfigEntry]:
+    """Snapshot of every editable key with its current effective source.
+
+    Visible to any authenticated user (the same audience that can see
+    `/admin/system-config`). Secret *values* are masked — the UI only
+    needs to know whether they're set.
+    """
+    return await _build_runtime_config(db)
+
+
+@router.put("/runtime-config", response_model=list[RuntimeConfigEntry])
+async def update_runtime_config(
+    payload: RuntimeConfigUpdateRequest,
+    user: Annotated[UserOut, Depends(require_permission("system.write"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[RuntimeConfigEntry]:
+    """Upsert one or more runtime overrides. Empty value clears an override."""
+    from app.services.runtime_config import SUPPORTED_KEYS, set_overrides
+
+    # Validate up-front; the service layer also checks but we want a clean
+    # 422 on the whole request rather than a partial commit.
+    for u in payload.updates:
+        if u.key not in SUPPORTED_KEYS:
+            raise HTTPException(422, f"Unsupported key: {u.key!r}")
+
+    await set_overrides(db, ((u.key, u.value) for u in payload.updates), actor=user.username)
+    return await _build_runtime_config(db)
+
+
 def _to_admin_user(u: User) -> AdminUser:
     return AdminUser(
         username=u.username,

@@ -51,6 +51,32 @@ async def connect_db():
         async_session_maker = async_sessionmaker(
             engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
         )
+
+        # Ensure the runtime-config table exists. Idempotent and scoped to
+        # ONLY this table — we don't want SQLAlchemy auto-creating the rest
+        # of the schema; that's owned by the SQL migrations. Safe to call on
+        # every cold start because the underlying SQL is CREATE TABLE IF NOT
+        # EXISTS via SQLAlchemy.
+        from .models.system_config import SystemConfigEntry
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    Base.metadata.create_all,
+                    tables=[SystemConfigEntry.__table__],
+                    checkfirst=True,
+                )
+        except Exception as e:
+            log.warning("system_config create_all skipped: %s", e)
+
+        # Warm the runtime-config override cache so DB-set values take effect
+        # immediately on cold start, before any voice/telephony route runs.
+        try:
+            from .services.runtime_config import get_overrides
+            async with async_session_maker() as warm_db:
+                await get_overrides(warm_db)
+        except Exception as e:
+            log.warning("runtime_config cache warm skipped: %s", e)
+
         log.info("Successfully connected to Postgres via SQLAlchemy.")
     except Exception as e:
         log.error(f"Failed to connect to database: {e}")

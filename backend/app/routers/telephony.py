@@ -20,6 +20,7 @@ import hmac
 import logging
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 from urllib.parse import urlencode
@@ -28,9 +29,12 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db_session
 from app.routers.auth import UserOut, current_user, require_permission
+from app.services.runtime_config import get_effective, sip_password_for
 
 E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
@@ -76,33 +80,45 @@ class CallSession(BaseModel):
 SESSIONS: dict[str, dict] = {}
 
 
-def _twilio_api_url(path: str) -> str:
-    return f"https://api.twilio.com/2010-04-01/Accounts/{settings.twilio_account_sid}{path}"
+@dataclass
+class _TwilioCreds:
+    account_sid: str
+    auth_token: str
+    from_number: str
 
 
-def _require_twilio() -> None:
-    if not settings.twilio_enabled:
-        missing = [
-            v for v, ok in [
-                ("TWILIO_ACCOUNT_SID", bool(settings.twilio_account_sid)),
-                ("TWILIO_AUTH_TOKEN", bool(settings.twilio_auth_token)),
-                ("TWILIO_FROM_NUMBER", bool(settings.twilio_from_number)),
-            ] if not ok
-        ]
+async def _resolve_twilio(db: AsyncSession) -> _TwilioCreds:
+    """Pull Twilio creds via the runtime-config override layer (DB > env)."""
+    account_sid = await get_effective(db, "twilio_account_sid")
+    auth_token = await get_effective(db, "twilio_auth_token")
+    from_number = await get_effective(db, "twilio_from_number")
+    missing = [
+        k for k, v in [
+            ("TWILIO_ACCOUNT_SID", account_sid),
+            ("TWILIO_AUTH_TOKEN", auth_token),
+            ("TWILIO_FROM_NUMBER", from_number),
+        ] if not v
+    ]
+    if missing:
         raise HTTPException(
             503,
-            f"Twilio not configured — missing env: {', '.join(missing)}. "
-            "Add them to backend/.env and restart.",
+            f"Twilio not configured — missing: {', '.join(missing)}. "
+            "Provision via Settings (Vercel env vars also accepted).",
         )
+    return _TwilioCreds(account_sid=account_sid, auth_token=auth_token, from_number=from_number)
 
 
-def _require_public_url() -> str:
-    base = settings.public_base_url.strip().rstrip("/")
+def _twilio_api_url(account_sid: str, path: str) -> str:
+    return f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}{path}"
+
+
+async def _resolve_public_url(db: AsyncSession) -> str:
+    base = (await get_effective(db, "public_base_url")).strip().rstrip("/")
     if not base:
         raise HTTPException(
             503,
-            "PUBLIC_BASE_URL is not set. Start ngrok (`ngrok http 8000`) and put the "
-            "public https URL in backend/.env so Twilio can fetch TwiML.",
+            "PUBLIC_BASE_URL is not set. Add it in Settings or as an env var so "
+            "Twilio can reach the TwiML endpoint.",
         )
     return base
 
@@ -130,28 +146,36 @@ class SipCredentials(BaseModel):
 
 
 @router.get("/sip-credentials", response_model=SipCredentials)
-def sip_credentials(user: Annotated[UserOut, Depends(current_user)]) -> SipCredentials:
+async def sip_credentials(
+    user: Annotated[UserOut, Depends(current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SipCredentials:
     """Return SIP softphone credentials for the authenticated agent.
 
-    The password is provisioned server-side via SIP_PASSWORDS_JSON. Without a
-    matching entry the endpoint returns 503 — the browser softphone must show
-    a clear error rather than fake a "Registered" state.
+    Reads from the runtime-config override layer (DB > env). Without a
+    configured server / domain / per-user password we return 503 so the
+    browser softphone can show a clear error instead of faking a
+    "Registered" state.
     """
-    if not settings.sip_enabled:
+    ws_server = await get_effective(db, "sip_ws_server")
+    sip_domain = await get_effective(db, "sip_domain")
+    if not (ws_server and sip_domain):
         raise HTTPException(
             503,
-            "SIP softphone not configured. Set SIP_WS_SERVER and SIP_DOMAIN in backend/.env.",
+            "SIP softphone not configured. Set sip_ws_server + sip_domain in "
+            "the Settings page (super_admin) or as env vars.",
         )
-    password = settings.sip_password_for(user.username)
+    passwords_json = await get_effective(db, "sip_passwords_json")
+    password = sip_password_for(passwords_json, user.username)
     if not password:
         raise HTTPException(
             503,
             f"No SIP password provisioned for {user.username!r}. "
-            "Add the user to SIP_PASSWORDS_JSON in backend/.env.",
+            "Add the user to sip_passwords_json (JSON object).",
         )
     return SipCredentials(
-        ws_server=settings.sip_ws_server,
-        sip_uri=f"sip:{user.username}@{settings.sip_domain}",
+        ws_server=ws_server,
+        sip_uri=f"sip:{user.username}@{sip_domain}",
         password=password,
         display_name=user.full_name or user.username,
     )
@@ -161,18 +185,16 @@ def sip_credentials(user: Annotated[UserOut, Depends(current_user)]) -> SipCrede
 async def originate(
     payload: OriginateRequest,
     user: Annotated[UserOut, Depends(require_permission("telephony.originate"))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> CallSession:
-    _require_twilio()
-    base = _require_public_url()
+    twilio = await _resolve_twilio(db)
+    base = await _resolve_public_url(db)
+    eleven_key = await get_effective(db, "elevenlabs_api_key")
 
     session_id = _new_session_id()
     now = datetime.now(timezone.utc).isoformat()
 
-    # Pre-synthesize audio if ElevenLabs is available, so the TwiML can <Play>.
-    # (If not, the TwiML route will fall back to <Say>.)
     audio_url: str | None = None
-    # Route through resolve_voice so a configured primary voice (e.g. an
-    # uploaded "Rajan" clone) overrides whatever the campaign was saved with.
     from app.routers.voice import resolve_voice  # local import to avoid cycle
 
     voice = resolve_voice(voice_id=payload.voice_id, language=payload.language)
@@ -180,7 +202,7 @@ async def originate(
         raise HTTPException(404, f"Voice {payload.voice_id!r} not found")
     resolved_voice_id = voice["id"]
     eleven_id = voice.get("elevenlabs_voice_id")
-    if settings.elevenlabs_enabled and eleven_id:
+    if eleven_key and eleven_id:
         try:
             from app.routers.voice import synthesize_to_cache
             await synthesize_to_cache(eleven_id, payload.text)
@@ -197,9 +219,7 @@ async def originate(
         "session_id": session_id,
         "call_sid": None,
         "to": payload.to,
-        "from_": settings.twilio_from_number,
-        # Store the *resolved* voice — that's the one we actually used for synth
-        # and the one tts_public will be called against.
+        "from_": twilio.from_number,
         "voice_id": resolved_voice_id,
         "language": payload.language,
         "text": payload.text,
@@ -211,16 +231,14 @@ async def originate(
         "duration_sec": None,
         "campaign_id": payload.campaign_id,
         "recording_url": None,
-        # private fields:
         "_audio_url": audio_url,
         "_user": user.username,
     }
     SESSIONS[session_id] = sess
 
-    # Place the call via Twilio REST API.
     form = {
         "To": payload.to,
-        "From": settings.twilio_from_number,
+        "From": twilio.from_number,
         "Url": twiml_url,
         "Method": "GET",
         "StatusCallback": status_cb,
@@ -233,9 +251,9 @@ async def originate(
     try:
         async with httpx.AsyncClient(timeout=20.0) as c:
             resp = await c.post(
-                _twilio_api_url("/Calls.json"),
+                _twilio_api_url(twilio.account_sid, "/Calls.json"),
                 data=form,
-                auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                auth=(twilio.account_sid, twilio.auth_token),
             )
     except httpx.HTTPError as e:
         sess["status"] = "failed"
@@ -294,43 +312,49 @@ def get_session(
 
 # ---- public webhooks (Twilio calls these — gated by signature) ----
 
-def _verify_twilio_signature(request: Request, form_params: dict[str, str] | None = None) -> None:
+async def _verify_twilio_signature(
+    request: Request,
+    db: AsyncSession,
+    form_params: dict[str, str] | None = None,
+) -> None:
     """Validate Twilio's X-Twilio-Signature header.
 
     https://www.twilio.com/docs/usage/security#validating-requests
-    The signature is HMAC-SHA1 of (url + sorted concatenated form params)
-    keyed by the account auth_token, base64-encoded.
-
-    Skips validation when twilio_validate_signatures is False (dev/test).
+    Signature = HMAC-SHA1(url + sorted concatenated form params) keyed by
+    the account auth_token, base64-encoded. Auth token is read via the
+    runtime-config override layer so a DB-set value matches outbound calls.
     """
     if not settings.twilio_validate_signatures:
         return
-    if not settings.twilio_auth_token:
-        # Without an auth token we have nothing to validate against — refuse.
-        raise HTTPException(503, "Cannot validate Twilio signature: TWILIO_AUTH_TOKEN unset")
+    auth_token = await get_effective(db, "twilio_auth_token")
+    if not auth_token:
+        raise HTTPException(503, "Cannot validate Twilio signature: twilio_auth_token unset")
     sig = request.headers.get("x-twilio-signature", "")
     if not sig:
         raise HTTPException(401, "Missing X-Twilio-Signature")
-    # Twilio signs the full URL Twilio used to reach us. If we're behind ngrok
-    # or another proxy, PUBLIC_BASE_URL is the authoritative host.
+    public_base = (await get_effective(db, "public_base_url")).rstrip("/")
     path = request.url.path
     query = ("?" + request.url.query) if request.url.query else ""
-    base = settings.public_base_url.rstrip("/") if settings.public_base_url else str(request.base_url).rstrip("/")
+    base = public_base or str(request.base_url).rstrip("/")
     full_url = f"{base}{path}{query}"
     payload = full_url
     if form_params:
         for k in sorted(form_params.keys()):
             payload += k + form_params[k]
-    mac = hmac.new(settings.twilio_auth_token.encode("utf-8"), payload.encode("utf-8"), hashlib.sha1)
+    mac = hmac.new(auth_token.encode("utf-8"), payload.encode("utf-8"), hashlib.sha1)
     expected = base64.b64encode(mac.digest()).decode("ascii")
     if not hmac.compare_digest(expected, sig):
         raise HTTPException(401, "Twilio signature mismatch")
 
 
 @router.get("/twiml/{session_id}")
-def twiml(session_id: str, request: Request) -> Response:
+async def twiml(
+    session_id: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
     """TwiML Twilio fetches when the call is answered."""
-    _verify_twilio_signature(request)
+    await _verify_twilio_signature(request, db)
     if not re.match(r"^sess_[A-Za-z0-9_-]{8,32}$", session_id):
         raise HTTPException(400, "Bad session_id")
     s = SESSIONS.get(session_id)
@@ -365,13 +389,17 @@ def twiml(session_id: str, request: Request) -> Response:
 
 
 @router.post("/status/{session_id}")
-async def status_callback(session_id: str, request: Request) -> Response:
+async def status_callback(
+    session_id: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
     """Twilio status webhook. Updates the session record."""
     if not re.match(r"^sess_[A-Za-z0-9_-]{8,32}$", session_id):
         raise HTTPException(400, "Bad session_id")
     form = await request.form()
     form_params = {k: str(v) for k, v in form.multi_items()}
-    _verify_twilio_signature(request, form_params=form_params)
+    await _verify_twilio_signature(request, db, form_params=form_params)
     s = SESSIONS.get(session_id)
     if not s:
         return Response(status_code=204)

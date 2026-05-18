@@ -1,8 +1,10 @@
 """Thin async ElevenLabs client.
 
 Avoids the official SDK so we don't pull a heavy dependency for two endpoints.
-All calls are no-ops if `settings.elevenlabs_api_key` is empty — callers should
-gate on `settings.elevenlabs_enabled` first.
+The API key is resolved per call from the runtime-config override cache,
+falling back to the env value. Callers should gate on
+`elevenlabs_enabled()` (also defined here) rather than touching `settings`
+directly so DB overrides win.
 """
 
 from __future__ import annotations
@@ -18,14 +20,27 @@ class ElevenLabsError(Exception):
     pass
 
 
+def _resolved_key() -> str:
+    """Cached override (if any) wins over the env var."""
+    # Local import to avoid a circular import at module load.
+    from app.services.runtime_config import _cache_get
+    cache = _cache_get() or {}
+    return cache.get("elevenlabs_api_key") or (settings.elevenlabs_api_key or "")
+
+
+def elevenlabs_enabled() -> bool:
+    return bool(_resolved_key())
+
+
 def _client() -> httpx.AsyncClient:
-    if not settings.elevenlabs_enabled:
+    key = _resolved_key()
+    if not key:
         raise ElevenLabsError(
-            "ELEVENLABS_API_KEY is not configured — set it in backend/.env"
+            "ElevenLabs API key is not configured — set it in Settings or as ELEVENLABS_API_KEY."
         )
     return httpx.AsyncClient(
         base_url=_BASE,
-        headers={"xi-api-key": settings.elevenlabs_api_key},
+        headers={"xi-api-key": key},
         timeout=httpx.Timeout(60.0, connect=10.0),
     )
 

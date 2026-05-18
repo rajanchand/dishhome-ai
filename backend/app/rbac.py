@@ -30,12 +30,17 @@ ALL_PERMISSIONS: tuple[str, ...] = (
     "users.manage",
     "roles.manage",
     "integrations.manage",
+    # Super-admin only: write runtime config overrides (SIP creds, API keys).
+    "system.write",
 )
 
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "super_admin": set(ALL_PERMISSIONS),
-    "admin": set(ALL_PERMISSIONS) - {"users.manage", "roles.manage"} | {"users.manage"},
+    # admin: everything except `roles.manage` and `system.write` — the latter
+    # gates writing runtime credentials (SIP / Twilio / API keys), which we
+    # restrict to super_admin so credentials never silently rotate.
+    "admin": set(ALL_PERMISSIONS) - {"roles.manage", "system.write"},
     "supervisor": {
         "calls.read",
         "campaigns.read",
