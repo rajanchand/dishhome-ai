@@ -22,6 +22,8 @@ from app.security import (
     DUMMY_HASH,
     create_access_token,
     decode_access_token,
+    record_login_event,
+    parse_user_agent,
 )
 import time
 
@@ -118,6 +120,28 @@ async def login(
 
     throttled, retry_after = login_throttled(ip, uname_raw)
     if throttled:
+        record_login_event(
+            username=uname_raw,
+            ip=ip,
+            user_agent=user_agent,
+            result="failure",
+            reason=f"Throttled. Retry after {retry_after}s"
+        )
+        try:
+            from app.models.user import LoginEvent as DBLoginEvent
+            db_event = DBLoginEvent(
+                username=uname_raw,
+                ip=ip,
+                user_agent=user_agent,
+                device=parse_user_agent(user_agent),
+                result="failure",
+                reason=f"Throttled. Retry after {retry_after}s"
+            )
+            db.add(db_event)
+            await db.commit()
+        except Exception:
+            pass
+
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             f"Too many failed attempts. Try again in {retry_after}s.",
@@ -134,6 +158,28 @@ async def login(
     
     if not ok:
         record_login_failure(ip, uname_raw)
+        record_login_event(
+            username=uname_raw,
+            ip=ip,
+            user_agent=user_agent,
+            result="failure",
+            reason="Invalid credentials"
+        )
+        try:
+            from app.models.user import LoginEvent as DBLoginEvent
+            db_event = DBLoginEvent(
+                username=uname_raw,
+                ip=ip,
+                user_agent=user_agent,
+                device=parse_user_agent(user_agent),
+                result="failure",
+                reason="Invalid credentials"
+            )
+            db.add(db_event)
+            await db.commit()
+        except Exception:
+            pass
+
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
 
     if needs_rehash(user.password_hash):
@@ -155,9 +201,41 @@ async def login(
         last_ip=ip
     )
     db.add(new_sess)
-    await db.commit()
     
-    audit(actor=user.username, action="login", target=user.username, detail=f"ip={ip}")
+    # Save login event in-memory first
+    record_login_event(
+        username=user.username,
+        ip=ip,
+        user_agent=user_agent,
+        result="success",
+        session_prefix=token[:8]
+    )
+    
+    # Also save to PostgreSQL database
+    try:
+        from app.models.user import LoginEvent as DBLoginEvent, AuditLog as DBAuditLog
+        db_event = DBLoginEvent(
+            username=user.username,
+            ip=ip,
+            user_agent=user_agent,
+            device=parse_user_agent(user_agent),
+            result="success",
+            session_prefix=token[:8],
+            reason=""
+        )
+        db.add(db_event)
+        
+        db_audit = DBAuditLog(
+            actor=user.username,
+            action="login",
+            target=user.username,
+            detail=f"ip={ip}"
+        )
+        db.add(db_audit)
+    except Exception:
+        pass
+
+    await db.commit()
     
     return LoginResponse(
         token=token,

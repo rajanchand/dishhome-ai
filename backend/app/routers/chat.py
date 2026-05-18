@@ -22,12 +22,15 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Optional
+from typing import Optional, Literal, Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.mock_data import CUSTOMERS, TICKETS
+from app.database import get_db_session
+from app.models.call import Call
+from app.mock_data import CUSTOMERS, TICKETS, CALLS
 
 log = logging.getLogger("dishhome.chat")
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -632,3 +635,118 @@ async def chat_feedback(session_id: str, rating: int, comment: str = "") -> dict
     """Submit feedback for a chat session."""
     log.info(f"Chat feedback: session={session_id} rating={rating} comment={comment}")
     return {"status": "ok", "message": "Thank you for your feedback!"}
+
+
+class LetsTalkRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    phone: str = Field(..., min_length=8, max_length=20)
+    issue: str = Field(..., max_length=100)
+    customer_id: Optional[str] = Field(default=None, max_length=20)
+    mode: Literal["callback", "browser"] = "browser"
+
+
+class LetsTalkResponse(BaseModel):
+    status: str
+    call_id: str
+    message: str
+    mode: str
+    speech_text: str
+    audio_url: Optional[str] = None
+
+
+@router.post("/lets-talk", response_model=LetsTalkResponse)
+async def chat_lets_talk(
+    payload: LetsTalkRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> LetsTalkResponse:
+    """Register an immediate 'Let's Talk' AI voice callback or browser-based audio session.
+
+    Logs a new active call in both the PostgreSQL database and the in-memory mock logs,
+    ensuring it pops up instantly in the operator live calls feed.
+    """
+    call_id = f"call_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc)
+    
+    # Format a highly natural bilingual transcript turn reflecting the escalations
+    issue_label = payload.issue.replace("_", " ").title()
+    transcript = [
+        {"role": "ai", "text": "नमस्ते! डिशहोम को लेट्स टक (Let's Talk) सेवामा स्वागत छ। मेरो नाम जेसिका (Jessica) हो।"},
+        {"role": "customer", "text": f"नमस्ते, मेरो इन्टरनेट सम्बन्धि समस्या छ। Category: {issue_label}."},
+        {"role": "ai", "text": f"हवस् {payload.name} जी, मैले हजुरको Customer ID: {payload.customer_id or 'Unknown'} अन्तर्गत {issue_label} को कलब्याक दर्ता गरिदिएकी छु। हाम्रा एजेन्ट वा भ्वाइस एआईले तुरुन्तै सम्पर्क गर्नुहुनेछ।"}
+    ]
+
+    # 1. Create a Call database model entry
+    db_call = Call(
+        id=call_id,
+        customer_id=payload.customer_id,
+        customer_name=payload.name,
+        phone_number=payload.phone,
+        called_number="16600122000" if payload.mode == "callback" else "Browser WebRTC Voice AI",
+        status="in_progress" if payload.mode == "browser" else "completed",
+        start_time=now,
+        end_time=None if payload.mode == "browser" else now,
+        duration_seconds=None if payload.mode == "browser" else 30,
+        language="ne",
+        sentiment="positive",
+        transcript=transcript,
+        intent=payload.issue,
+        ai_confidence=0.96,
+        resolution="lets_talk_voice_escalation"
+    )
+    db.add(db_call)
+    
+    # 2. Add to mock in-memory logs for backward compatibility
+    CALLS.append({
+        "id": call_id,
+        "caller_number": payload.phone,
+        "called_number": "16600122000" if payload.mode == "callback" else "Browser WebRTC Voice AI",
+        "customer_id": payload.customer_id,
+        "customer_name": payload.name,
+        "language": "ne",
+        "started_at": now.isoformat(),
+        "ended_at": None if payload.mode == "browser" else now.isoformat(),
+        "duration_sec": None if payload.mode == "browser" else 30,
+        "status": "in_progress" if payload.mode == "browser" else "completed",
+        "resolution": "lets_talk_voice_escalation",
+        "intent": payload.issue,
+        "ai_confidence": 0.96,
+        "sentiment": "positive",
+        "labels": ["lets-talk", "web-escalation"],
+        "transcript": transcript
+    })
+    
+    try:
+        await db.commit()
+    except Exception as e:
+        log.error(f"Failed to commit Let's Talk call session: {e}")
+        await db.rollback()
+
+    # Pre-synthesize the voice if ElevenLabs is configured
+    speech_text = f"नमस्ते {payload.name} जी! डिशहोमको लेट्स टक सेवामा स्वागत छ। हामी तपाईंको कलब्याक दर्ता गर्दैछौं।"
+    audio_url = None
+    
+    try:
+        from app.routers.voice import resolve_voice, synthesize_to_cache, elevenlabs_enabled
+        voice = resolve_voice(language="ne", gender="female")
+        if voice and elevenlabs_enabled():
+            eleven_id = voice.get("elevenlabs_voice_id")
+            if eleven_id:
+                await synthesize_to_cache(eleven_id, speech_text)
+                audio_url = f"/voice/tts?voice_id={voice['id']}&text={speech_text}"
+    except Exception as e:
+        log.warning(f"Failed to pre-synthesize Let's Talk intro speech: {e}")
+
+    welcome_msg = (
+        f"Let's Talk session created! Dialing your number **{payload.phone}**..."
+        if payload.mode == "callback"
+        else "Connecting directly to Jessica (Voice AI)..."
+    )
+
+    return LetsTalkResponse(
+        status="success",
+        call_id=call_id,
+        message=welcome_msg,
+        mode=payload.mode,
+        speech_text=speech_text,
+        audio_url=audio_url,
+    )

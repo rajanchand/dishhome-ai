@@ -31,12 +31,14 @@ interface NavItem {
   label: string;
   icon: React.ReactNode;
   requires?: string; // permission required to see this link
+  requiresRole?: string; // role required to see this link
 }
 
 interface NavGroup {
   title: string;
   items: NavItem[];
   requires?: string;
+  requiresRole?: string;
 }
 
 const NAV: NavGroup[] = [
@@ -70,7 +72,7 @@ const NAV: NavGroup[] = [
     requires: "users.manage",
     items: [
       { to: "/admin/access", label: "Access Portal", icon: <Shield size={18} />, requires: "users.manage" },
-      { to: "/admin/login-activity", label: "Login Activity", icon: <Activity size={18} />, requires: "users.manage" },
+      { to: "/admin/login-activity", label: "Login Activity", icon: <Activity size={18} />, requiresRole: "super_admin" },
       { to: "/settings", label: "Settings", icon: <Settings size={18} /> },
     ],
   },
@@ -81,18 +83,24 @@ function hasPerm(perms: string[] | undefined, required: string | undefined): boo
   return !!perms?.includes(required);
 }
 
+function hasRole(userRole: string | undefined, requiredRole: string | undefined): boolean {
+  if (!requiredRole) return true;
+  return userRole === requiredRole;
+}
+
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { theme, setTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const perms = user?.permissions ?? [];
+  const userRole = user?.role;
 
   const visibleGroups = NAV
-    .filter((g) => hasPerm(perms, g.requires))
+    .filter((g) => hasPerm(perms, g.requires) && hasRole(userRole, g.requiresRole))
     .map((g) => ({
       ...g,
-      items: g.items.filter((i) => hasPerm(perms, i.requires)),
+      items: g.items.filter((i) => hasPerm(perms, i.requires) && hasRole(userRole, i.requiresRole)),
     }))
     .filter((g) => g.items.length > 0);
 

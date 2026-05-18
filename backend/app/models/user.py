@@ -26,3 +26,28 @@ class Session(Base):
     issued_ip: Mapped[str | None] = mapped_column(String(45))
     user_agent: Mapped[str | None] = mapped_column(String(1024))
     last_ip: Mapped[str | None] = mapped_column(String(45))
+
+class LoginEvent(Base):
+    __tablename__ = "login_events"
+    __table_args__ = {"schema": "dh"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    username: Mapped[str] = mapped_column(String(80), nullable=False)
+    ip: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(1024))
+    device: Mapped[str | None] = mapped_column(String(255))
+    result: Mapped[str] = mapped_column(String(50), nullable=False)  # "success" | "failure"
+    reason: Mapped[str | None] = mapped_column(String(255))
+    session_prefix: Mapped[str | None] = mapped_column(String(8))
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    __table_args__ = {"schema": "dh"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    actor: Mapped[str] = mapped_column(String(80), nullable=False)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    target: Mapped[str] = mapped_column(String(255), server_default="")
+    detail: Mapped[str] = mapped_column(String(4000), server_default="")

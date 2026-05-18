@@ -79,3 +79,21 @@ jobs:
           CORS_ALLOWED_ORIGINS: https://app.example.com
           DATABASE_URL: postgresql://dishhome:ci-postgres-password@postgres:5432/dishhome_ai
         run: docker compose -f docker-compose.prod.yml config >/tmp/prod-compose.yml
+
+  deploy:
+    name: Deploy to VPS
+    needs: [backend, frontend, compose]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            cd /root/dishhome-ai || cd /root/website/dishhome-ai || cd /var/www/dishhome-ai || cd ~/dishhome-ai
+            git pull origin main
+            docker compose -f docker-compose.prod.yml up -d --build

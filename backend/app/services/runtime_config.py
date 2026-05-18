@@ -156,6 +156,17 @@ async def set_overrides(
             target=key,
             detail="(masked)" if is_secret else (value or "<cleared>"),
         )
+        try:
+            from app.models.user import AuditLog as DBAuditLog
+            db_audit = DBAuditLog(
+                actor=actor,
+                action="config.set",
+                target=key,
+                detail="(masked)" if is_secret else (value or "<cleared>"),
+            )
+            db.add(db_audit)
+        except Exception:
+            pass
 
     await db.commit()
     # Repopulate the cache from the just-committed state so subsequent reads

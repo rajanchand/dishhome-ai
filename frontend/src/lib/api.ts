@@ -293,6 +293,10 @@ export interface AdminUser {
   permissions: string[];
   created_at?: string | null;
   created_by?: string | null;
+  last_login_at?: number | null;
+  last_login_ip?: string | null;
+  last_login_device?: string | null;
+  last_login_location?: string | null;
 }
 
 export interface Role {
