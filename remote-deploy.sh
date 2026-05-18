@@ -38,7 +38,13 @@ sed -i 's|^VITE_API_BASE=.*|VITE_API_BASE=/api|' .env
 docker compose -f docker-compose.prod.yml down --remove-orphans || true
 docker compose -f docker-compose.prod.yml up -d --build
 
-# Write Nginx config
+# Generate a self-signed certificate for SSL fallback
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/dishhome-selfsigned.key \
+  -out /etc/ssl/certs/dishhome-selfsigned.crt \
+  -subj "/CN=ai.zero-trust-security.org" 2>/dev/null || true
+
+# Write Nginx config with both port 80 and port 443 SSL
 cat << 'EOF' > /etc/nginx/sites-available/dishhome.conf
 server {
     listen 80;
@@ -62,9 +68,38 @@ server {
         proxy_cache_bypass $http_upgrade;
     }
 }
+
+server {
+    listen 443 ssl;
+    server_name ai.zero-trust-security.org;
+
+    ssl_certificate /etc/ssl/certs/dishhome-selfsigned.crt;
+    ssl_certificate_key /etc/ssl/private/dishhome-selfsigned.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
 EOF
 
-# Enable and restart Nginx
+# Enable the config and reload Nginx
 ln -sf /etc/nginx/sites-available/dishhome.conf /etc/nginx/sites-enabled/
 nginx -t
 systemctl restart nginx
+
+# Attempt to upgrade self-signed SSL to Let's Encrypt if reachable
+certbot --nginx -d ai.zero-trust-security.org --non-interactive --agree-tos -m rajanchand48@gmail.com || echo "Certbot failed, keeping self-signed certificate for Cloudflare Full SSL mode"
