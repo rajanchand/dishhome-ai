@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import get_db_session
 from app.models.user import User, Session as UserSession
 from app.rbac import ROLE_ORDER, ROLE_PERMISSIONS, permissions_for
-from app.routers.auth import UserOut, require_permission
+from app.routers.auth import UserOut, current_user, require_permission
 from app.security import (
     audit,
     audit_log,
@@ -93,6 +93,79 @@ class AuditEntry(BaseModel):
     action: str
     target: str
     detail: str = ""
+
+
+# ── System config snapshot (read-only) ──
+# Mirrors what the Settings page displays. Never includes secrets — only
+# enabled flags, model names, and the non-sensitive identifiers an operator
+# would put on a status board.
+class _AIConfig(BaseModel):
+    ollama_model: str
+    ollama_host: str
+    tts_engine: str
+    elevenlabs_model_id: str | None
+
+
+class _TelephonyConfig(BaseModel):
+    sip_enabled: bool
+    sip_ws_server: str | None
+    sip_domain: str | None
+    audiosocket_host: str
+    audiosocket_port: int
+    audio_server_enabled: bool
+    twilio_enabled: bool
+    twilio_from_number: str | None
+    public_base_url: str | None
+
+
+class _IntegrationsConfig(BaseModel):
+    elevenlabs_configured: bool
+    supabase_configured: bool
+    sentry_configured: bool
+
+
+class SystemConfig(BaseModel):
+    app_env: str
+    ai: _AIConfig
+    telephony: _TelephonyConfig
+    integrations: _IntegrationsConfig
+    cors_origins: list[str]
+
+
+@router.get("/system-config", response_model=SystemConfig)
+def system_config(_: Annotated[UserOut, Depends(current_user)]) -> SystemConfig:
+    """Snapshot of effective configuration for the Settings page.
+
+    All values are derived from environment variables — the UI is purely
+    informational, edits must happen via env / Vercel dashboard. Secrets
+    (API keys, passwords, DB URLs) are never returned.
+    """
+    return SystemConfig(
+        app_env=settings.app_env,
+        ai=_AIConfig(
+            ollama_model=settings.ollama_model,
+            ollama_host=settings.ollama_host,
+            tts_engine="ElevenLabs" if settings.elevenlabs_enabled else "Piper (local fallback)",
+            elevenlabs_model_id=settings.elevenlabs_model_id if settings.elevenlabs_enabled else None,
+        ),
+        telephony=_TelephonyConfig(
+            sip_enabled=settings.sip_enabled,
+            sip_ws_server=settings.sip_ws_server or None,
+            sip_domain=settings.sip_domain or None,
+            audiosocket_host=settings.freeswitch_audiosocket_host,
+            audiosocket_port=settings.freeswitch_audiosocket_port,
+            audio_server_enabled=settings.enable_audio_server,
+            twilio_enabled=settings.twilio_enabled,
+            twilio_from_number=settings.twilio_from_number or None,
+            public_base_url=settings.public_base_url or None,
+        ),
+        integrations=_IntegrationsConfig(
+            elevenlabs_configured=settings.elevenlabs_enabled,
+            supabase_configured=settings.supabase_enabled,
+            sentry_configured=bool(settings.sentry_dsn),
+        ),
+        cors_origins=settings.cors_origins_list,
+    )
 
 
 def _to_admin_user(u: User) -> AdminUser:
