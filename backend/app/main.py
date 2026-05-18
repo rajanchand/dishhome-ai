@@ -22,15 +22,10 @@ from app.routers import (
 from contextlib import asynccontextmanager
 import asyncio
 from app.database import connect_db, disconnect_db
-from app.freeswitch_esl import start_esl, esl_client
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.validate_for_runtime()
     await connect_db()
-    
-    # Start ESL connection to FreeSWITCH
-    await start_esl()
-    
     audio_task: asyncio.Task | None = None
     if settings.enable_audio_server:
         from app.audio_server import start_audio_server
@@ -42,7 +37,6 @@ async def lifespan(app: FastAPI):
             await audio_task
         except asyncio.CancelledError:
             pass
-    esl_client.disconnect()
     await disconnect_db()
 
 app = FastAPI(
