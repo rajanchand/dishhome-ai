@@ -1,0 +1,19 @@
+<include>
+  <extension name="AI_Agent_AudioSocket">
+    <!-- Match inbound calls to toll-free number 16600122000 -->
+    <condition field="destination_number" expression="^(16600122000|ai_test)$">
+      <!-- Answer the call -->
+      <action application="answer"/>
+      
+      <!-- Stream the audio to the Python backend via AudioSocket/TCP -->
+      <!-- The backend handles STT (faster-whisper) -> LLM -> TTS (piper) -->
+      <!-- Using 'backend' hostname as defined in docker-compose.yml -->
+      <action application="audiosocket" data="backend:4000"/>
+      
+      <!-- Or if using mod_audio_fork: -->
+      <!-- <action application="audio_fork" data="backend 4000"/> -->
+      
+      <action application="hangup"/>
+    </condition>
+  </extension>
+</include>

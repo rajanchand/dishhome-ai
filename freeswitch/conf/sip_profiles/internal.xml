@@ -1,0 +1,23 @@
+<profile name="internal">
+  <settings>
+    <!-- WebRTC Settings for Softphone Client -->
+    <param name="ws-binding"  value=":5066"/>
+    <param name="wss-binding" value=":7443"/>
+    <param name="tls-cert-dir" value="/etc/freeswitch/tls"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="ext-rtp-ip" value="auto-nat"/>
+    <param name="ext-sip-ip" value="auto-nat"/>
+    <param name="apply-nat-acl" value="nat.auto"/>
+    <param name="apply-inbound-acl" value="domains"/>
+    
+    <!-- Codecs - Opus is heavily preferred for WebRTC -->
+    <param name="inbound-codec-prefs" value="opus,PCMU,PCMA"/>
+    <param name="outbound-codec-prefs" value="opus,PCMU,PCMA"/>
+    
+    <!-- Vital for WebRTC -->
+    <param name="dtmf-type" value="rfc2833"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rtp-hold-timeout-sec" value="1800"/>
+  </settings>
+</profile>
