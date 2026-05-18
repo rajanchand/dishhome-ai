@@ -4,6 +4,7 @@ import { useAuth } from "../lib/auth";
 import { DishHomeLogo } from "./Logo";
 import KhushiChatbot from "./KhushiChatbot";
 import { useTheme } from "./ThemeProvider";
+import Softphone from "./Softphone";
 
 import {
   LayoutDashboard,
@@ -196,6 +197,9 @@ export default function Layout() {
 
       {/* Khushi AI Chatbot — floating widget on all pages */}
       <KhushiChatbot />
+
+      {/* SIP WebRTC Softphone Widget */}
+      <Softphone />
     </div>
   );
 }
