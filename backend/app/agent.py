@@ -1,50 +1,85 @@
 import operator
+import re
 from typing import Annotated, TypedDict
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 import logging
-import httpx
-import json
+from sqlalchemy import select, or_
 
 logger = logging.getLogger(__name__)
 
-# Define Tools
+# ── Tool input validation ──
+# The LLM constructs these strings, but the LLM is *not* an authenticated user;
+# treat its output as untrusted input and enforce the same shape we'd expect
+# from a request path parameter.
+_ONT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_QUERY_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
+
+
 @tool
 async def check_router_status(ont_id: str) -> str:
     """Check the status of a DishHome ONT router device by its ID. Use this if the user asks why their internet is down."""
-    from app.security import create_access_token
-    token = create_access_token({"sub": "admin", "role": "super_admin"})
-    
+    ont_id = (ont_id or "").strip()
+    if not _ONT_ID_RE.match(ont_id):
+        return "Invalid ONT ID."
+
+    # Call the DB layer directly — going through HTTP would require minting a
+    # privileged token for the LLM (which can be steered by prompt injection)
+    # and would loop back through the request pipeline.
+    from app.database import async_session_maker
+    from app.models.customer import ONTStatus as ONTStatusModel
+    if async_session_maker is None:
+        return "Database unavailable."
     try:
-        async with httpx.AsyncClient(base_url="http://127.0.0.1:8000") as client:
-            headers = {"Authorization": f"Bearer {token}"}
-            response = await client.get(f"/integrations/dishhome/router-status/{ont_id}", headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                return f"Router {ont_id} is {'Online' if data['online'] else 'Offline'}. Outage in area: {data['area_outage']}. Uptime: {data['uptime_hours']} hours."
+        async with async_session_maker() as db:
+            result = await db.execute(select(ONTStatusModel).where(ONTStatusModel.ont_id == ont_id))
+            row = result.scalar_one_or_none()
+        if not row:
             return f"Router {ont_id} not found."
+        return (
+            f"Router {ont_id} is {'Online' if row.online else 'Offline'}. "
+            f"Outage in area: {row.area_outage}. Uptime: {row.uptime_hours} hours."
+        )
     except Exception as e:
-        logger.error(f"Tool check_router_status failed: {e}")
+        logger.error("Tool check_router_status failed: %s", e)
         return "Failed to check router status."
+
 
 @tool
 async def lookup_customer(query: str) -> str:
     """Lookup a DishHome customer by their customer ID, mobile number, or smartcard number."""
-    from app.security import create_access_token
-    token = create_access_token({"sub": "admin", "role": "super_admin"})
-    
+    query = (query or "").strip()
+    if not _QUERY_RE.match(query):
+        return "Invalid lookup query."
+
+    from app.database import async_session_maker
+    from app.models.customer import Customer as CustomerModel
+    if async_session_maker is None:
+        return "Database unavailable."
     try:
-        async with httpx.AsyncClient(base_url="http://127.0.0.1:8000") as client:
-            headers = {"Authorization": f"Bearer {token}"}
-            response = await client.get(f"/integrations/dishhome/customer/{query}", headers=headers)
-            if response.status_code == 200:
-                data = response.json()
-                return f"Customer Found: Name: {data['name']}, Package: {data['package']}, ONT ID: {data['ont_id']}, Balance: NPR {data['balance_npr']}, Status: {data['status']}"
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(CustomerModel).where(
+                    or_(
+                        CustomerModel.customer_id == query,
+                        CustomerModel.mobile == query,
+                        CustomerModel.smartcard == query,
+                    )
+                )
+            )
+            cust = result.scalar_one_or_none()
+        if not cust:
             return "Customer not found."
+        # Avoid surfacing the smartcard number / mobile to the LLM context;
+        # the agent only needs identity + service-relevant fields to help.
+        return (
+            f"Customer Found: Name: {cust.name}, Package: {cust.package}, "
+            f"ONT ID: {cust.ont_id}, Balance: NPR {cust.balance_npr}, Status: {cust.status}"
+        )
     except Exception as e:
-        logger.error(f"Tool lookup_customer failed: {e}")
+        logger.error("Tool lookup_customer failed: %s", e)
         return "Failed to lookup customer."
 
 tools = [check_router_status, lookup_customer]

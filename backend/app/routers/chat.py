@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -30,8 +33,49 @@ log = logging.getLogger("dishhome.chat")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # ── Chat session store (in-memory; migrate to Redis/Supabase in prod) ──
-_SESSIONS: dict[str, list[dict]] = {}
+# OrderedDict + LRU eviction caps memory under sustained traffic, and the TTL
+# drops abandoned sessions so an attacker can't grow the map by spraying new
+# session_ids. Move to Redis if you need multi-instance state.
+SESSION_TTL_SECONDS = 60 * 60  # 1 hour of inactivity
+MAX_SESSIONS = 10_000
 MAX_HISTORY = 50  # per session
+
+_SESSIONS: "OrderedDict[str, dict]" = OrderedDict()
+_SESSIONS_LOCK = Lock()
+
+
+def _touch_session(session_id: str) -> list[dict]:
+    """Return the history list for `session_id`, creating/updating LRU order.
+
+    Evicts expired or oldest entries while holding the lock so concurrent
+    requests can't race past the cap.
+    """
+    now = time.time()
+    cutoff = now - SESSION_TTL_SECONDS
+    with _SESSIONS_LOCK:
+        # Drop expired entries from the front (oldest by last_seen).
+        while _SESSIONS:
+            oldest_id, entry = next(iter(_SESSIONS.items()))
+            if entry["last_seen"] >= cutoff:
+                break
+            _SESSIONS.popitem(last=False)
+            if oldest_id == session_id:
+                # The session we're about to use just expired — start fresh.
+                break
+
+        entry = _SESSIONS.get(session_id)
+        if entry is None:
+            entry = {"history": [], "last_seen": now}
+            _SESSIONS[session_id] = entry
+        else:
+            entry["last_seen"] = now
+            _SESSIONS.move_to_end(session_id)
+
+        # Hard cap on the map. Drop the LRU entry if we're over.
+        while len(_SESSIONS) > MAX_SESSIONS:
+            _SESSIONS.popitem(last=False)
+
+        return entry["history"]
 
 
 # ── Request / Response models ──
@@ -557,23 +601,13 @@ async def chat_message(req: ChatRequest) -> ChatResponse:
     # Generate reply
     reply, suggestions, metadata = _generate_reply(req.message, lang)
 
-    # Store conversation history
-    if session_id not in _SESSIONS:
-        _SESSIONS[session_id] = []
-    history = _SESSIONS[session_id]
-    history.append({
-        "role": "user",
-        "content": req.message,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    history.append({
-        "role": "assistant",
-        "content": reply,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    # Trim history
+    # Store conversation history (TTL + LRU eviction handled by _touch_session)
+    history = _touch_session(session_id)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    history.append({"role": "user", "content": req.message, "timestamp": now_iso})
+    history.append({"role": "assistant", "content": reply, "timestamp": now_iso})
     if len(history) > MAX_HISTORY * 2:
-        _SESSIONS[session_id] = history[-MAX_HISTORY * 2:]
+        del history[: len(history) - MAX_HISTORY * 2]
 
     return ChatResponse(
         session_id=session_id,
@@ -587,7 +621,9 @@ async def chat_message(req: ChatRequest) -> ChatResponse:
 @router.get("/history/{session_id}")
 async def chat_history(session_id: str) -> dict:
     """Retrieve chat history for a session."""
-    history = _SESSIONS.get(session_id, [])
+    with _SESSIONS_LOCK:
+        entry = _SESSIONS.get(session_id)
+        history = list(entry["history"]) if entry else []
     return {"session_id": session_id, "messages": history}
 
 

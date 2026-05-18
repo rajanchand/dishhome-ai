@@ -65,31 +65,45 @@ async def current_user(
 ) -> UserOut:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
-    
+
     token = authorization.split(" ", 1)[1].strip()
-    
-    # Lookup session in DB
+
+    # Verify JWT signature + expiry BEFORE touching the DB. Without this step a
+    # forged token whose payload happens to match a stored session row would be
+    # accepted — the DB lookup alone is not authentication.
+    claims = decode_access_token(token)
+    if not claims or not claims.get("sub"):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
+
+    # Confirm the token is still a live, server-issued session (revocation,
+    # rotation, and "log out everywhere" all rely on this row existing).
     result = await db.execute(
         select(UserSession, User)
         .join(User, UserSession.username == User.username)
         .where(UserSession.token == token)
     )
     row = result.first()
-    
+
     if not row:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session")
-    
+
     sess, user = row
+    if sess.username != claims["sub"]:
+        # Token signed for a different user than the session record claims —
+        # never trust either side; drop the session and reject.
+        await db.delete(sess)
+        await db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session/token mismatch")
+
     now = time.time()
     if sess.expires_at < now:
         await db.delete(sess)
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired")
 
-    # Update last seen
     sess.last_seen = now
     await db.commit()
-    
+
     return _user_public(user)
 
 @router.post("/login", response_model=LoginResponse)

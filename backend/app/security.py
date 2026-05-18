@@ -67,24 +67,37 @@ def is_hashed(value: str) -> bool:
 # and managed via routers/admin.py. In-memory sessions have been removed.
 
 SESSION_TTL_SECONDS = 86400  # 24 hours
+JWT_ALGORITHM = "HS256"
+_MIN_SECRET_LEN = 32
+
+
+def _require_secret() -> str:
+    from app.config import settings
+    secret = (settings.app_secret_key or "").strip()
+    if len(secret) < _MIN_SECRET_LEN:
+        raise RuntimeError(
+            f"APP_SECRET_KEY must be set to at least {_MIN_SECRET_LEN} chars. "
+            "Generate with: python -c 'import secrets; print(secrets.token_urlsafe(64))'"
+        )
+    return secret
+
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
-    from app.config import settings
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
-    if expires_delta:
-        expire = now + expires_delta
-    else:
-        expire = now + timedelta(minutes=15)
+    expire = now + (expires_delta if expires_delta else timedelta(minutes=15))
     to_encode.update({"exp": expire, "iat": now})
-    secret = settings.app_secret_key or "dev_secret_key_1234567890"
-    return jwt.encode(to_encode, secret, algorithm="HS256")
+    return jwt.encode(to_encode, _require_secret(), algorithm=JWT_ALGORITHM)
+
 
 def decode_access_token(token: str) -> dict | None:
-    from app.config import settings
-    secret = settings.app_secret_key or "dev_secret_key_1234567890"
+    """Return claims if the token is valid, otherwise None.
+
+    A None return collapses signature failures, expiration, and malformed
+    tokens into the same outcome so callers can't infer *why* a token is bad.
+    """
     try:
-        return jwt.decode(token, secret, algorithms=["HS256"])
+        return jwt.decode(token, _require_secret(), algorithms=[JWT_ALGORITHM])
     except jwt.PyJWTError:
         return None
 

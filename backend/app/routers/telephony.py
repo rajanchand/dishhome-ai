@@ -118,7 +118,43 @@ def health(_: Annotated[UserOut, Depends(current_user)]) -> dict:
         "from_number": settings.twilio_from_number or None,
         "public_base_url": settings.public_base_url or None,
         "elevenlabs_enabled": settings.elevenlabs_enabled,
+        "sip_enabled": settings.sip_enabled,
     }
+
+
+class SipCredentials(BaseModel):
+    ws_server: str
+    sip_uri: str
+    password: str
+    display_name: str
+
+
+@router.get("/sip-credentials", response_model=SipCredentials)
+def sip_credentials(user: Annotated[UserOut, Depends(current_user)]) -> SipCredentials:
+    """Return SIP softphone credentials for the authenticated agent.
+
+    The password is provisioned server-side via SIP_PASSWORDS_JSON. Without a
+    matching entry the endpoint returns 503 — the browser softphone must show
+    a clear error rather than fake a "Registered" state.
+    """
+    if not settings.sip_enabled:
+        raise HTTPException(
+            503,
+            "SIP softphone not configured. Set SIP_WS_SERVER and SIP_DOMAIN in backend/.env.",
+        )
+    password = settings.sip_password_for(user.username)
+    if not password:
+        raise HTTPException(
+            503,
+            f"No SIP password provisioned for {user.username!r}. "
+            "Add the user to SIP_PASSWORDS_JSON in backend/.env.",
+        )
+    return SipCredentials(
+        ws_server=settings.sip_ws_server,
+        sip_uri=f"sip:{user.username}@{settings.sip_domain}",
+        password=password,
+        display_name=user.full_name or user.username,
+    )
 
 
 @router.post("/originate", response_model=CallSession)

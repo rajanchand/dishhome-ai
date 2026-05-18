@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     freeswitch_audiosocket_port: int = 4000
     enable_audio_server: bool = False
 
+    # ---- SIP softphone (browser → WSS → FreeSWITCH) ----
+    # When SIP_WS_SERVER is empty, the /telephony/sip-credentials endpoint
+    # returns 503 and the frontend Softphone refuses to start, instead of
+    # silently pretending to be registered.
+    # SIP_PASSWORDS is a JSON object mapping {username: password}. Provision
+    # one entry per agent. Example:
+    #   SIP_PASSWORDS={"alice":"…","bob":"…"}
+    sip_ws_server: str = ""
+    sip_domain: str = ""
+    sip_passwords_json: str = ""
+
     redis_host: str = "localhost"
     redis_port: int = 6379
 
@@ -111,6 +122,26 @@ class Settings(BaseSettings):
     @property
     def twilio_enabled(self) -> bool:
         return bool(self.twilio_account_sid and self.twilio_auth_token and self.twilio_from_number)
+
+    @property
+    def sip_enabled(self) -> bool:
+        return bool(self.sip_ws_server and self.sip_domain)
+
+    def sip_password_for(self, username: str) -> str:
+        """Return the SIP password for `username`, or "" if not provisioned.
+
+        Parsed lazily on each call — the map is small and changes rarely; the
+        cost is dwarfed by the WebSocket handshake that follows.
+        """
+        import json
+        if not self.sip_passwords_json.strip():
+            return ""
+        try:
+            data = json.loads(self.sip_passwords_json)
+        except json.JSONDecodeError:
+            return ""
+        value = data.get(username) if isinstance(data, dict) else None
+        return value if isinstance(value, str) else ""
 
     def elevenlabs_voice_for(self, language: str, gender: str) -> str:
         return {

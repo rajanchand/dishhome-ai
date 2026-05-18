@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import secrets
 import struct
 import numpy as np
 from typing import Dict
@@ -8,6 +9,21 @@ import os
 
 from app.config import settings
 from app.agent import run_conversation_agent
+
+# AudioSocket protocol constants (per Asterisk res_audiosocket):
+#   type 0x00 = HANGUP, 0x01 = ID (UUID), 0x02 = SILENCE, 0x03 = ERROR,
+#   type 0x10 = SLIN audio payload (8kHz/16-bit/mono).
+MSG_TYPE_HANGUP = 0x00
+MSG_TYPE_ID = 0x01
+MSG_TYPE_ERROR = 0x03
+MSG_TYPE_AUDIO = 0x10
+
+# Defensive caps — the wire format permits a 16-bit length so an attacker
+# could ask us to allocate up to 65 KB per frame. SLIN frames at 20 ms / 8 kHz
+# are 320 bytes; UUID identifiers are 16 bytes. Anything wildly larger is a
+# protocol violation, not a legitimate caller.
+MAX_AUDIO_PAYLOAD = 4096
+MAX_ID_PAYLOAD = 64
 
 try:
     from piper import PiperVoice
@@ -120,41 +136,72 @@ class AudioSocketServer:
         addr = writer.get_extra_info('peername')
         log.info(f"New AudioSocket connection from {addr}")
 
+        # Generate the session key *server-side*. Earlier code used the raw
+        # UUID payload sent by the peer as the dict key, which lets a malicious
+        # caller pick the key (and therefore collide with / hijack another
+        # active session). The peer's UUID is still logged for cross-referencing
+        # with the SIP/FreeSWITCH side.
+        call_id = secrets.token_hex(16)
+        peer_id: str | None = None
+        session: AudioSession | None = None
+
         try:
-            # First read header
             header = await reader.readexactly(3)
             msg_type = header[0]
             payload_len = int.from_bytes(header[1:3], byteorder='big')
-            payload = await reader.readexactly(payload_len)
-            
-            call_id = payload.hex() if msg_type == 1 else f"call_{addr[1]}"
+            if msg_type != MSG_TYPE_ID or payload_len > MAX_ID_PAYLOAD:
+                log.warning(
+                    "Rejecting AudioSocket %s: first frame type=0x%02x len=%d",
+                    addr, msg_type, payload_len,
+                )
+                return
+            peer_id = (await reader.readexactly(payload_len)).hex() if payload_len else ""
+
             session = AudioSession(call_id, self.asr_model, self.tts_voice)
             self.sessions[call_id] = session
+            log.info("[%s] AudioSocket session opened (peer_id=%s)", call_id, peer_id or "<none>")
 
             while True:
                 header = await reader.readexactly(3)
                 msg_type = header[0]
                 payload_len = int.from_bytes(header[1:3], byteorder='big')
-                
-                if payload_len > 0:
+
+                if msg_type == MSG_TYPE_AUDIO:
+                    if payload_len == 0 or payload_len > MAX_AUDIO_PAYLOAD:
+                        log.warning("[%s] Dropping oversized audio frame: %d bytes", call_id, payload_len)
+                        # Still consume the bytes to stay framed; cap allocation.
+                        remaining = payload_len
+                        while remaining:
+                            chunk = await reader.read(min(remaining, MAX_AUDIO_PAYLOAD))
+                            if not chunk:
+                                raise asyncio.IncompleteReadError(b"", remaining)
+                            remaining -= len(chunk)
+                        continue
                     payload = await reader.readexactly(payload_len)
-                else:
-                    payload = b""
-                    
-                if msg_type == 16:  # Audio Payload
                     await session.process_frame(payload, writer)
-                elif msg_type == 2 or msg_type == 3:  # Error or Hangup
-                    log.info(f"[{call_id}] Connection ended")
+                elif msg_type in (MSG_TYPE_HANGUP, MSG_TYPE_ERROR):
+                    log.info(f"[{call_id}] Connection ended (type=0x{msg_type:02x})")
                     break
+                else:
+                    # Unknown frame: skip its payload but keep the stream framed.
+                    if payload_len:
+                        if payload_len > MAX_AUDIO_PAYLOAD:
+                            log.warning("[%s] Unknown frame with oversized len=%d, closing", call_id, payload_len)
+                            break
+                        await reader.readexactly(payload_len)
 
         except asyncio.IncompleteReadError:
             log.info(f"AudioSocket connection closed by peer {addr}")
         except Exception as e:
-            log.error(f"Error in AudioSocket session: {e}", exc_info=True)
+            log.error(f"Error in AudioSocket session [{call_id}]: {e}", exc_info=True)
         finally:
-            log.info(f"Cleaning up AudioSocket connection from {addr}")
-            writer.close()
-            await writer.wait_closed()
+            log.info(f"Cleaning up AudioSocket connection from {addr} [{call_id}]")
+            self.sessions.pop(call_id, None)
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
     async def start(self):
         server = await asyncio.start_server(self.handle_connection, self.host, self.port)

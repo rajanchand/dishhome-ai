@@ -17,8 +17,10 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -99,17 +101,45 @@ class PreviewResponse(BaseModel):
     engine: Literal["elevenlabs", "browser-tts"] = "browser-tts"
 
 
-def _load_uploaded() -> list[dict]:
-    if not CATALOG_FILE.exists():
-        return []
+# A single lock guards both the catalog (_load/_save_uploaded) and the
+# defaults file (_load/_save_defaults). Uploads can race with each other and
+# with the "set primary" endpoints; without this lock the JSON files end up
+# with last-writer-wins truncated content.
+_CATALOG_LOCK = Lock()
+
+
+def _atomic_write_json(path: Path, payload) -> None:
+    """Write JSON via temp-file + rename so readers never see a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
-        return json.loads(CATALOG_FILE.read_text())
-    except json.JSONDecodeError:
-        return []
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        # Best-effort cleanup of the temp file on any failure.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _load_uploaded() -> list[dict]:
+    with _CATALOG_LOCK:
+        if not CATALOG_FILE.exists():
+            return []
+        try:
+            return json.loads(CATALOG_FILE.read_text())
+        except json.JSONDecodeError:
+            return []
 
 
 def _save_uploaded(items: list[dict]) -> None:
-    CATALOG_FILE.write_text(json.dumps(items, indent=2))
+    with _CATALOG_LOCK:
+        _atomic_write_json(CATALOG_FILE, items)
 
 
 def _builtin_with_eleven(v: dict) -> dict:
@@ -139,19 +169,21 @@ def _find_voice(voice_id: str) -> dict | None:
 # `defaults_by_lang_gender` lets you set per-(language,gender) fallbacks.
 
 def _load_defaults() -> dict:
-    if not DEFAULTS_FILE.exists():
-        return {"primary_voice_id": None, "defaults_by_lang_gender": {}}
-    try:
-        data = json.loads(DEFAULTS_FILE.read_text())
-        data.setdefault("primary_voice_id", None)
-        data.setdefault("defaults_by_lang_gender", {})
-        return data
-    except json.JSONDecodeError:
-        return {"primary_voice_id": None, "defaults_by_lang_gender": {}}
+    with _CATALOG_LOCK:
+        if not DEFAULTS_FILE.exists():
+            return {"primary_voice_id": None, "defaults_by_lang_gender": {}}
+        try:
+            data = json.loads(DEFAULTS_FILE.read_text())
+            data.setdefault("primary_voice_id", None)
+            data.setdefault("defaults_by_lang_gender", {})
+            return data
+        except json.JSONDecodeError:
+            return {"primary_voice_id": None, "defaults_by_lang_gender": {}}
 
 
 def _save_defaults(data: dict) -> None:
-    DEFAULTS_FILE.write_text(json.dumps(data, indent=2))
+    with _CATALOG_LOCK:
+        _atomic_write_json(DEFAULTS_FILE, data)
 
 
 def resolve_voice(
