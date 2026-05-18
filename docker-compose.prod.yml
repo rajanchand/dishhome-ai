@@ -31,6 +31,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       target: production
+    env_file:
+      - .env
     environment:
       APP_ENV: production
       APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY}
@@ -46,7 +48,7 @@ services:
       TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_multilingual_v2}
-      ENABLE_AUDIO_SERVER: ${ENABLE_AUDIO_SERVER:-true}
+      ENABLE_AUDIO_SERVER: ${ENABLE_AUDIO_SERVER:-false}
       TWILIO_VALIDATE_SIGNATURES: "true"
     ports:
       - "${APP_PORT:-8000}:8000"
@@ -70,6 +72,8 @@ services:
       target: production
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    env_file:
+      - .env
     ports:
       - "${FRONTEND_PORT:-80}:80"
     depends_on:

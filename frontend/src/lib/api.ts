@@ -3,10 +3,11 @@ export const BASE: string = (() => {
   const env = import.meta.env.VITE_API_BASE;
   // Trust the env var only when it looks like a real URL / path
   if (env && (env.startsWith("/") || env.startsWith("http"))) return env as string;
-  // Auto-detect Vercel deployment
+  // Auto-detect Vercel deployment & production domains
   if (typeof window !== "undefined" && (
     window.location.hostname.includes("vercel.app") ||
-    window.location.hostname.includes("dishhome")
+    window.location.hostname.includes("dishhome") ||
+    window.location.hostname.includes("zero-trust-security.org")
   )) return "/api";
   return "http://127.0.0.1:8000";
 })();
