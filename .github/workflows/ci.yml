@@ -87,7 +87,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
-        if: secrets.VPS_HOST != ''
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        if: env.VPS_HOST != ''
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
